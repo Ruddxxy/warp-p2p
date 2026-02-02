@@ -1,0 +1,70 @@
+# Dependencies
+node_modules/
+vendor/
+
+# Build outputs
+dist/
+build/
+*.exe
+out/
+
+# Environment files
+.env
+.env.local
+.env.production
+.env.*.local
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+*.sublime-workspace
+*.sublime-project
+
+# OS
+.DS_Store
+Thumbs.db
+Desktop.ini
+.Spotlight-V100
+.Trashes
+
+# Logs
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+
+# Coverage
+coverage/
+*.lcov
+.nyc_output/
+
+# Temp
+*.tmp
+.cache/
+*.bak
+
+# Go specific
+server/server
+*.out
+__debug_bin*
+
+# TypeScript
+*.tsbuildinfo
+
+# Vite
+*.local
+
+# Testing
+.vitest/
+
+# Vercel
+.vercel
+
+# Railway
+.railway
+
+# Claude
+.claude/
