@@ -4,14 +4,13 @@
  * Tests for PAKE handshake, encryption/decryption, and key derivation
  */
 
-import { describe, it, expect, beforeEach, vi } from 'vitest';
+import { describe, it, expect, beforeEach } from 'vitest';
 import {
   SecurityManager,
   generateRoomCode,
   arrayBufferToBase64,
   base64ToArrayBuffer,
-  encrypt,
-  decrypt
+  encrypt
 } from '../Security';
 
 describe('Security Module', () => {

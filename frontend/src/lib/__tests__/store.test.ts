@@ -104,7 +104,7 @@ describe('useTransferStore', () => {
 
     it('handles errors and sets error state', async () => {
       const { TransferEngine } = await import('../TransferEngine');
-      (TransferEngine as ReturnType<typeof vi.fn>).mockImplementationOnce((_url, events) => ({
+      (TransferEngine as ReturnType<typeof vi.fn>).mockImplementationOnce((_url, _events) => ({
         createRoom: vi.fn().mockRejectedValue(new Error('Test error')),
         destroy: vi.fn()
       }));

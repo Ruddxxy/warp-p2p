@@ -147,7 +147,6 @@ export class TransferEngine {
   private file: File | null = null;
   private fileMetadata: FileMetadata | null = null;
   private bytesTransferred = 0;
-  private startTime = 0;
   private speedHistory: number[] = [];
   private lastSpeedUpdate = 0;
   private lastBytesForSpeed = 0;
@@ -156,7 +155,6 @@ export class TransferEngine {
   private writeStream: WritableStream | null = null;
   private writer: WritableStreamDefaultWriter | null = null;
   private receivedChunks: Uint8Array[] = [];
-  private receiptReceived = false;
 
   constructor(signalingUrl: string, events: TransferEngineEvents = {}) {
     this.events = events;
@@ -483,7 +481,6 @@ export class TransferEngine {
         await this.finishReceiving();
       } else if (msg.type === 'receipt' && this.role === 'sender') {
         // Handle receipt from receiver
-        this.receiptReceived = true;
         if (msg.status === 'verified') {
           console.log('[Engine] Receipt confirmed - transfer verified');
           this.setState('completed');
@@ -510,15 +507,12 @@ export class TransferEngine {
     this.receivedChunks = [];
 
     this.setState('transferring');
-    this.startTime = Date.now();
   }
 
   private async startSending(): Promise<void> {
     if (!this.file || !this.dataChannel) return;
 
     this.setState('transferring');
-    this.startTime = Date.now();
-    this.receiptReceived = false;
 
     const totalChunks = Math.ceil(this.file.size / CHUNK_SIZE);
 
@@ -712,7 +706,6 @@ export class TransferEngine {
     this.bytesTransferred = 0;
     this.speedHistory = [];
     this.receivedChunks = [];
-    this.receiptReceived = false;
   }
 
   // Cleanup on destroy

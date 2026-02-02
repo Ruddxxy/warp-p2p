@@ -183,11 +183,9 @@ export interface HandshakeMessage {
  */
 export class SecurityManager {
   private state: HandshakeState | null = null;
-  private roomCode: string = '';
 
   // Initialize with room code
   async init(code: string): Promise<void> {
-    this.roomCode = code;
     const keyPair = await generateECDHKeyPair();
     const codeKey = await deriveKeyFromCode(code);
 
@@ -299,6 +297,5 @@ export class SecurityManager {
   // Clean up
   destroy(): void {
     this.state = null;
-    this.roomCode = '';
   }
 }
