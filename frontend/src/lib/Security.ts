@@ -290,8 +290,18 @@ export class SecurityManager {
 
   // Decrypt chunk from transfer
   async decryptChunk(data: ArrayBuffer): Promise<ArrayBuffer> {
-    if (!this.state?.sessionKey) throw new Error('No session key established');
-    return decrypt(this.state.sessionKey, data);
+    if (!this.state?.sessionKey) {
+      console.error('[Security] No session key established for decryption');
+      throw new Error('No session key established');
+    }
+    try {
+      return await decrypt(this.state.sessionKey, data);
+    } catch (error) {
+      console.error('[Security] Decryption failed:', error);
+      console.error('[Security] Data size:', data.byteLength);
+      console.error('[Security] Session key exists:', !!this.state.sessionKey);
+      throw error;
+    }
   }
 
   // Clean up

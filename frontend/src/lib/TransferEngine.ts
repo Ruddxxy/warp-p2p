@@ -473,8 +473,11 @@ export class TransferEngine {
   }
 
   private async handleDataMessage(data: ArrayBuffer | string): Promise<void> {
+    console.log('[Engine] Received data, type:', typeof data, 'size:', typeof data === 'string' ? data.length : data.byteLength);
+
     if (typeof data === 'string') {
       const msg: DataMessage = JSON.parse(data);
+      console.log('[Engine] Received message type:', msg.type);
 
       if (msg.type === 'metadata') {
         this.fileMetadata = msg.metadata!;
@@ -555,12 +558,17 @@ export class TransferEngine {
   }
 
   private async handleChunk(data: ArrayBuffer): Promise<void> {
-    if (!this.writer) return;
+    if (!this.writer) {
+      console.warn('[Engine] No writer available for chunk');
+      return;
+    }
 
     try {
       // Decrypt chunk
+      console.log('[Engine] Decrypting chunk, size:', data.byteLength);
       const decrypted = await this.securityManager.decryptChunk(data);
       const chunk = new Uint8Array(decrypted);
+      console.log('[Engine] Chunk decrypted, size:', chunk.length);
 
       // Store chunk for hash verification (only for files < 500MB to save memory)
       if (this.fileMetadata && this.fileMetadata.size < 500 * 1024 * 1024) {
