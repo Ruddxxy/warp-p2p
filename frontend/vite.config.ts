@@ -11,10 +11,5 @@ export default defineConfig({
     outDir: 'dist',
     sourcemap: false,
     minify: 'esbuild'
-  },
-  define: {
-    'import.meta.env.VITE_SIGNALING_URL': JSON.stringify(
-      process.env.VITE_SIGNALING_URL || 'ws://localhost:8080/ws'
-    )
   }
 });

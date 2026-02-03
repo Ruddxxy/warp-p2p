@@ -78,7 +78,26 @@ interface TransferStore {
   restoreSession: () => PersistedSession | null;
 }
 
-const SIGNALING_URL = import.meta.env.VITE_SIGNALING_URL || 'ws://localhost:8080/ws';
+// Get signaling URL from environment - MUST be set in production
+function getSignalingUrl(): string {
+  const url = import.meta.env.VITE_SIGNALING_URL as string | undefined;
+
+  if (!url) {
+    // Check if we're in production (not localhost)
+    const isProduction = typeof window !== 'undefined' &&
+      !window.location.hostname.includes('localhost') &&
+      !window.location.hostname.includes('127.0.0.1');
+
+    if (isProduction) {
+      console.error('[Store] VITE_SIGNALING_URL not configured! Set this environment variable in your deployment platform.');
+    }
+    return 'ws://localhost:8080/ws';
+  }
+
+  return url;
+}
+
+const SIGNALING_URL = getSignalingUrl();
 
 export const useTransferStore = create<TransferStore>((set, get) => ({
   engine: null,
