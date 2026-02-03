@@ -350,15 +350,21 @@ export class TransferEngine {
 
     // Handle connection state
     this.peerConnection.onconnectionstatechange = () => {
-      const state = this.peerConnection?.connectionState;
-      console.log('[Engine] Connection state:', state);
+      const connState = this.peerConnection?.connectionState;
+      console.log('[Engine] Connection state:', connState);
 
-      if (state === 'connected') {
+      if (connState === 'connected') {
         this.setState('ready');
-      } else if (state === 'failed') {
-        this.handleError(new Error('Peer connection failed'));
-      } else if (state === 'disconnected') {
-        this.events.onPeerDisconnected?.();
+      } else if (connState === 'failed') {
+        // Ignore failures after successful completion
+        if (this.state !== 'completed') {
+          this.handleError(new Error('Peer connection failed'));
+        }
+      } else if (connState === 'disconnected') {
+        // Only notify if not completed
+        if (this.state !== 'completed') {
+          this.events.onPeerDisconnected?.();
+        }
       }
     };
 
@@ -393,9 +399,15 @@ export class TransferEngine {
 
     this.dataChannel.onclose = () => {
       console.log('[Engine] Data channel closed');
+      // Don't treat as error if transfer completed successfully
     };
 
     this.dataChannel.onerror = (error) => {
+      // Ignore errors after successful completion (cleanup race condition)
+      if (this.state === 'completed') {
+        console.log('[Engine] Data channel error after completion (ignored):', error);
+        return;
+      }
       console.error('[Engine] Data channel error:', error);
       this.handleError(new Error('Data channel error'));
     };
@@ -668,6 +680,11 @@ export class TransferEngine {
   }
 
   private handleError(error: Error): void {
+    // Don't override completed state with error
+    if (this.state === 'completed') {
+      console.log('[Engine] Error after completion (ignored):', error.message);
+      return;
+    }
     console.error('[Engine] Error:', error.message);
     this.setState('error');
     this.events.onError?.(error);
