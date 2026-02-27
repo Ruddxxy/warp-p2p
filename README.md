@@ -31,7 +31,7 @@ sequenceDiagram
     Note over Sender,Receiver: 3. WebRTC Connection
     Sender->>Receiver: SDP Offer
     Receiver->>Sender: SDP Answer
-    Sender<-->Receiver: ICE Candidates
+    Sender-->>Receiver: ICE Candidates
 
     Note over Sender,Receiver: 4. P2P Transfer (Direct)
     Sender->>Receiver: Encrypted chunks (64KB each)
