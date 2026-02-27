@@ -49,9 +49,25 @@ export class SignalingClient {
     this.config = config;
   }
 
+  private static CONNECTION_TIMEOUT_MS = 10_000;
+
   // Connect to signaling server
   async connect(): Promise<string> {
     return new Promise((resolve, reject) => {
+      let settled = false;
+
+      const settle = (fn: (value: never) => void, value: unknown) => {
+        if (settled) return;
+        settled = true;
+        clearTimeout(timer);
+        fn(value as never);
+      };
+
+      const timer = setTimeout(() => {
+        settle(reject, new Error('Connection timeout: server did not respond within 10 seconds'));
+        this.ws?.close();
+      }, SignalingClient.CONNECTION_TIMEOUT_MS);
+
       try {
         this.ws = new WebSocket(this.config.url);
 
@@ -65,37 +81,44 @@ export class SignalingClient {
         this.ws.onclose = () => {
           console.log('[Signaling] Disconnected from server');
           this.config.onClose?.();
-          this.attemptReconnect();
+          if (!settled) {
+            settle(reject, new Error('Connection closed before server acknowledged the connection'));
+          } else {
+            this.attemptReconnect();
+          }
         };
 
-        this.ws.onerror = (error) => {
-          console.error('[Signaling] WebSocket error:', error);
-          this.config.onError?.(error);
-          reject(error);
+        this.ws.onerror = (event) => {
+          console.error('[Signaling] WebSocket error:', event);
+          this.config.onError?.(event);
+          const error = this.ws?.readyState === WebSocket.CONNECTING
+            ? new Error('Could not connect to server. Check your internet connection.')
+            : new Error('Connection to server lost unexpectedly');
+          settle(reject, error);
         };
 
         this.ws.onmessage = (event) => {
           try {
             const message: SignalingMessage = JSON.parse(event.data);
-            this.handleMessage(message, resolve);
+            // Always assign clientId so reconnects and late messages still work
+            if (message.type === 'connected' && message.clientId) {
+              this.clientId = message.clientId;
+              console.log('[Signaling] Received client ID:', this.clientId);
+              settle(resolve, this.clientId);
+            }
+            this.handleMessage(message);
           } catch (e) {
             console.error('[Signaling] Failed to parse message:', e);
           }
         };
       } catch (error) {
-        reject(error);
+        const message = error instanceof Error ? error.message : 'Failed to create WebSocket connection';
+        settle(reject, new Error(message));
       }
     });
   }
 
-  private handleMessage(message: SignalingMessage, resolveConnect?: (clientId: string) => void) {
-    // Handle connected message (returns client ID)
-    if (message.type === 'connected' && message.clientId) {
-      this.clientId = message.clientId;
-      console.log('[Signaling] Received client ID:', this.clientId);
-      resolveConnect?.(this.clientId);
-    }
-
+  private handleMessage(message: SignalingMessage) {
     // Notify specific type handlers
     const handlers = this.messageHandlers.get(message.type);
     if (handlers) {
@@ -115,7 +138,8 @@ export class SignalingClient {
     this.isReconnecting = true;
     this.reconnectAttempts++;
 
-    const delay = this.reconnectDelay * Math.pow(2, this.reconnectAttempts - 1);
+    const baseDelay = this.reconnectDelay * Math.pow(2, this.reconnectAttempts - 1);
+    const delay = Math.round(baseDelay * (0.5 + Math.random() * 0.5));
     console.log(`[Signaling] Reconnecting in ${delay}ms (attempt ${this.reconnectAttempts})`);
 
     setTimeout(() => {

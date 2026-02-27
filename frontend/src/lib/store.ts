@@ -1,5 +1,6 @@
 import { create } from 'zustand';
 import { TransferEngine, TransferProgress, TransferState, FileMetadata, TransferRole } from './TransferEngine';
+import { type ConnectionPhase, type AppError, mapErrorToAppError } from '../types';
 
 // Session persistence for room code recovery
 const STORAGE_KEY = 'warp-lan-session' as const;
@@ -62,6 +63,8 @@ interface TransferStore {
   roomCode: string;
   peerConnected: boolean;
   error: string | null;
+  connectionPhase: ConnectionPhase | null;
+  appError: AppError | null;
 
   // File info
   file: File | null;
@@ -99,6 +102,15 @@ function getSignalingUrl(): string {
 
 const SIGNALING_URL = getSignalingUrl();
 
+function deriveConnectionPhase(state: TransferState, peerConnected: boolean): ConnectionPhase | null {
+  if (state === 'idle' || state === 'error' || state === 'transferring' || state === 'completed') return null;
+  if (state === 'connecting' && !peerConnected) return 'waiting-for-peer';
+  if (peerConnected && state === 'connecting') return 'peer-connected';
+  if (state === 'handshaking') return 'securing';
+  if (state === 'ready') return 'ready';
+  return null;
+}
+
 export const useTransferStore = create<TransferStore>((set, get) => ({
   engine: null,
   state: 'idle',
@@ -106,6 +118,8 @@ export const useTransferStore = create<TransferStore>((set, get) => ({
   roomCode: '',
   peerConnected: false,
   error: null,
+  connectionPhase: null,
+  appError: null,
   file: null,
   fileMetadata: null,
   progress: null,
@@ -117,16 +131,26 @@ export const useTransferStore = create<TransferStore>((set, get) => ({
     }
 
     const engine = new TransferEngine(signalingUrl, {
-      onStateChange: (state) => set({ state }),
+      onStateChange: (state) => {
+        const { peerConnected } = get();
+        set({ state, connectionPhase: deriveConnectionPhase(state, peerConnected) });
+      },
       onProgress: (progress) => set({ progress }),
-      onError: (error) => set({ error: error.message, state: 'error' }),
-      onPeerConnected: () => set({ peerConnected: true }),
+      onError: (error) => {
+        const appError = mapErrorToAppError(error.message);
+        set({ error: error.message, state: 'error', appError });
+      },
+      onPeerConnected: () => {
+        const { state } = get();
+        set({ peerConnected: true, connectionPhase: deriveConnectionPhase(state, true) });
+      },
       onPeerDisconnected: () => set({ peerConnected: false }),
       onFileMetadata: (metadata) => set({ fileMetadata: metadata }),
       onRoomCode: (code) => set({ roomCode: code }),
       onHashVerified: (verified) => {
         if (!verified) {
-          set({ error: 'File integrity check failed' });
+          const appError = mapErrorToAppError('File integrity check failed');
+          set({ error: 'File integrity check failed', appError });
         }
       }
     });
@@ -142,7 +166,7 @@ export const useTransferStore = create<TransferStore>((set, get) => ({
     }
 
     const currentEngine = get().engine!;
-    set({ file, role: 'sender', error: null });
+    set({ file, role: 'sender', error: null, appError: null });
 
     try {
       const code = await currentEngine.createRoom(file);
@@ -150,8 +174,9 @@ export const useTransferStore = create<TransferStore>((set, get) => ({
       return code;
     } catch (error) {
       const message = error instanceof Error ? error.message : 'Failed to create room';
-      set({ error: message, state: 'error' });
-      throw error;
+      const appError = mapErrorToAppError(message);
+      set({ error: message, state: 'error', appError });
+      return '';
     }
   },
 
@@ -163,15 +188,15 @@ export const useTransferStore = create<TransferStore>((set, get) => ({
     }
 
     const currentEngine = get().engine!;
-    set({ role: 'receiver', roomCode: code, error: null });
+    set({ role: 'receiver', roomCode: code, error: null, appError: null });
     saveSession(code, 'receiver');
 
     try {
       await currentEngine.joinRoom(code);
     } catch (error) {
       const message = error instanceof Error ? error.message : 'Failed to join room';
-      set({ error: message, state: 'error' });
-      throw error;
+      const appError = mapErrorToAppError(message);
+      set({ error: message, state: 'error', appError });
     }
   },
 
@@ -190,6 +215,8 @@ export const useTransferStore = create<TransferStore>((set, get) => ({
       roomCode: '',
       peerConnected: false,
       error: null,
+      connectionPhase: null,
+      appError: null,
       file: null,
       fileMetadata: null,
       progress: null

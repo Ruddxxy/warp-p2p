@@ -70,11 +70,11 @@ export function DropZone({ onFileSelect, disabled }: DropZoneProps) {
   return (
     <motion.div
       className={`
-        relative w-full max-w-2xl aspect-video
+        relative w-full max-w-2xl h-[200px] md:h-auto md:aspect-video
         rounded-2xl border-2 border-dashed
         cursor-pointer
         glass-panel glass-panel-interactive glass-glow
-        flex flex-col items-center justify-center gap-6
+        flex flex-col items-center justify-center gap-4 md:gap-6
         ${isDragging ? 'border-[#00ff41] !bg-[#00ff41]/15' : 'border-[#00ff41]/30 hover:border-[#00ff41]/60'}
         ${disabled ? 'opacity-50 cursor-not-allowed' : ''}
       `}
@@ -121,13 +121,11 @@ export function DropZone({ onFileSelect, disabled }: DropZoneProps) {
         transition={{ type: 'spring', stiffness: 300, damping: 20 }}
       >
         <svg
-          width="64"
-          height="64"
+          className="w-12 h-12 md:w-16 md:h-16 drop-shadow-[0_0_10px_rgba(0,255,65,0.5)]"
           viewBox="0 0 24 24"
           fill="none"
           stroke="#00ff41"
           strokeWidth="1.5"
-          className="drop-shadow-[0_0_10px_rgba(0,255,65,0.5)]"
         >
           <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" />
           <polyline points="17 8 12 3 7 8" />
@@ -136,7 +134,7 @@ export function DropZone({ onFileSelect, disabled }: DropZoneProps) {
       </motion.div>
 
       {/* Text */}
-      <div className="relative z-10 text-center px-8">
+      <div className="relative z-10 text-center px-4 md:px-8">
         <p className="text-[#00ff41] text-lg font-medium mb-2 text-glow">
           {isDragging ? 'Drop file here' : 'Drop file or click to select'}
         </p>

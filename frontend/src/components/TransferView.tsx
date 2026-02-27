@@ -21,46 +21,29 @@ function formatTime(seconds: number): string {
 }
 
 function SpeedGraph({ speedHistory }: { speedHistory: number[] }) {
-  const points = useMemo(() => {
-    if (speedHistory.length < 2) return '';
+  const { points, areaPath } = useMemo(() => {
+    if (speedHistory.length < 2) return { points: '', areaPath: '' };
 
     const maxSpeed = Math.max(...speedHistory, 1);
     const width = 300;
     const height = 80;
     const padding = 10;
-
+    const usableHeight = height - 2 * padding;
     const xStep = (width - 2 * padding) / (speedHistory.length - 1);
 
-    return speedHistory
-      .map((speed, i) => {
-        const x = padding + i * xStep;
-        const y = height - padding - (speed / maxSpeed) * (height - 2 * padding);
-        return `${i === 0 ? 'M' : 'L'} ${x} ${y}`;
-      })
-      .join(' ');
-  }, [speedHistory]);
+    let linePath = '';
+    let area = `M ${padding} ${height - padding}`;
 
-  const areaPath = useMemo(() => {
-    if (speedHistory.length < 2) return '';
-
-    const maxSpeed = Math.max(...speedHistory, 1);
-    const width = 300;
-    const height = 80;
-    const padding = 10;
-
-    const xStep = (width - 2 * padding) / (speedHistory.length - 1);
-
-    let path = `M ${padding} ${height - padding}`;
-
-    speedHistory.forEach((speed, i) => {
+    for (let i = 0; i < speedHistory.length; i++) {
       const x = padding + i * xStep;
-      const y = height - padding - (speed / maxSpeed) * (height - 2 * padding);
-      path += ` L ${x} ${y}`;
-    });
+      const y = height - padding - (speedHistory[i] / maxSpeed) * usableHeight;
+      linePath += `${i === 0 ? 'M' : ' L'} ${x} ${y}`;
+      area += ` L ${x} ${y}`;
+    }
 
-    path += ` L ${padding + (speedHistory.length - 1) * xStep} ${height - padding} Z`;
+    area += ` L ${padding + (speedHistory.length - 1) * xStep} ${height - padding} Z`;
 
-    return path;
+    return { points: linePath, areaPath: area };
   }, [speedHistory]);
 
   return (
@@ -114,7 +97,7 @@ export function TransferView({ state, progress, fileMetadata, role }: TransferVi
 
   return (
     <motion.div
-      className="relative w-full max-w-lg glass-panel glass-glow rounded-2xl p-8"
+      className="relative w-full max-w-lg glass-panel glass-glow rounded-2xl p-5 md:p-8"
       initial={{ opacity: 0, scale: 0.95 }}
       animate={{ opacity: 1, scale: 1 }}
       transition={{ duration: 0.4 }}
@@ -206,7 +189,7 @@ export function TransferView({ state, progress, fileMetadata, role }: TransferVi
       </div>
 
       {/* Stats row */}
-      <div className="flex justify-between text-sm mb-4">
+      <div className="flex flex-col gap-1 md:flex-row md:justify-between text-sm mb-4">
         <span className="text-[#00ff41] font-mono text-glow">{percentage.toFixed(1)}%</span>
         {progress && (
           <span className="text-[#00ff41]/50 font-mono">

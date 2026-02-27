@@ -1,5 +1,6 @@
-import { useState, useRef, useEffect } from 'react';
+import { useState, useRef, useEffect, useMemo } from 'react';
 import { motion } from 'framer-motion';
+import { mapErrorToAppError } from '../types';
 
 interface CodeInputProps {
   onSubmit: (code: string) => void;
@@ -10,6 +11,11 @@ interface CodeInputProps {
 export function CodeInput({ onSubmit, disabled, error }: CodeInputProps) {
   const [digits, setDigits] = useState(['', '', '', '']);
   const inputRefs = useRef<(HTMLInputElement | null)[]>([]);
+
+  const structuredError = useMemo(
+    () => (error ? mapErrorToAppError(error) : null),
+    [error]
+  );
 
   useEffect(() => {
     inputRefs.current[0]?.focus();
@@ -57,7 +63,7 @@ export function CodeInput({ onSubmit, disabled, error }: CodeInputProps) {
 
   return (
     <motion.div
-      className="relative w-full max-w-md glass-panel glass-glow rounded-2xl p-8"
+      className="relative w-full max-w-md glass-panel glass-glow rounded-2xl p-6 md:p-8"
       initial={{ opacity: 0, y: 20 }}
       animate={{ opacity: 1, y: 0 }}
       transition={{ duration: 0.4 }}
@@ -83,7 +89,7 @@ export function CodeInput({ onSubmit, disabled, error }: CodeInputProps) {
               onKeyDown={(e) => handleKeyDown(i, e)}
               disabled={disabled}
               className={`
-                w-14 h-16 text-center text-3xl font-mono font-bold
+                w-12 h-14 md:w-14 md:h-16 text-center text-2xl md:text-3xl font-mono font-bold
                 glass-input rounded-lg outline-none
                 transition-all duration-200
                 ${error ? 'border-red-500/70 focus:border-red-500' : 'focus:border-[#00ff41]'}
@@ -99,13 +105,14 @@ export function CodeInput({ onSubmit, disabled, error }: CodeInputProps) {
       </div>
 
       {/* Error message */}
-      {error && (
+      {structuredError && (
         <motion.div
           className="mb-4 py-2 px-4 glass-panel border-red-500/30 bg-red-500/10 rounded-lg"
           initial={{ opacity: 0, y: -10 }}
           animate={{ opacity: 1, y: 0 }}
         >
-          <p className="text-red-400 text-sm text-center">{error}</p>
+          <p className="text-red-400 text-sm text-center font-medium">{structuredError.message}</p>
+          <p className="text-red-400/60 text-xs text-center mt-1">{structuredError.suggestion}</p>
         </motion.div>
       )}
 

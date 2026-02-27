@@ -87,7 +87,7 @@ describe('SignalingClient', () => {
       const client = new SignalingClient({ url: 'ws://test:8080/ws' });
       const connectPromise = client.connect();
 
-      await vi.runAllTimersAsync();
+      await vi.advanceTimersByTimeAsync(1);
 
       mockWs.simulateMessage({ type: 'connected', clientId: 'abc123' });
 
@@ -101,7 +101,7 @@ describe('SignalingClient', () => {
       const client = new SignalingClient({ url: 'ws://test:8080/ws', onOpen });
 
       client.connect();
-      await vi.runAllTimersAsync();
+      await vi.advanceTimersByTimeAsync(1);
 
       expect(onOpen).toHaveBeenCalled();
     });
@@ -110,7 +110,7 @@ describe('SignalingClient', () => {
       const client = new SignalingClient({ url: 'ws://test:8080/ws' });
       const connectPromise = client.connect();
 
-      await vi.runAllTimersAsync();
+      await vi.advanceTimersByTimeAsync(1);
       mockWs.simulateError();
 
       await expect(connectPromise).rejects.toBeDefined();
@@ -121,7 +121,7 @@ describe('SignalingClient', () => {
     it('sends handshake-init message', async () => {
       const client = new SignalingClient({ url: 'ws://test:8080/ws' });
       client.connect();
-      await vi.runAllTimersAsync();
+      await vi.advanceTimersByTimeAsync(1);
       mockWs.simulateMessage({ type: 'connected', clientId: 'test' });
 
       client.joinRoom('42-69');
@@ -140,7 +140,7 @@ describe('SignalingClient', () => {
     beforeEach(async () => {
       client = new SignalingClient({ url: 'ws://test:8080/ws' });
       client.connect();
-      await vi.runAllTimersAsync();
+      await vi.advanceTimersByTimeAsync(1);
       mockWs.simulateMessage({ type: 'connected', clientId: 'test' });
       client.joinRoom('test-room');
       mockWs.clearSentMessages();
@@ -188,7 +188,7 @@ describe('SignalingClient', () => {
     it('registers and triggers type-specific handlers', async () => {
       const client = new SignalingClient({ url: 'ws://test:8080/ws' });
       client.connect();
-      await vi.runAllTimersAsync();
+      await vi.advanceTimersByTimeAsync(1);
 
       const handler = vi.fn();
       client.on('peer-joined', handler);
@@ -202,7 +202,7 @@ describe('SignalingClient', () => {
     it('unsubscribe removes handler', async () => {
       const client = new SignalingClient({ url: 'ws://test:8080/ws' });
       client.connect();
-      await vi.runAllTimersAsync();
+      await vi.advanceTimersByTimeAsync(1);
 
       const handler = vi.fn();
       const unsubscribe = client.on('peer-joined', handler);
@@ -218,7 +218,7 @@ describe('SignalingClient', () => {
       const onMessage = vi.fn();
       const client = new SignalingClient({ url: 'ws://test:8080/ws', onMessage });
       client.connect();
-      await vi.runAllTimersAsync();
+      await vi.advanceTimersByTimeAsync(1);
 
       mockWs.simulateMessage({ type: 'connected', clientId: 'test' });
 
@@ -230,7 +230,7 @@ describe('SignalingClient', () => {
     it('returns true when connected', async () => {
       const client = new SignalingClient({ url: 'ws://test:8080/ws' });
       client.connect();
-      await vi.runAllTimersAsync();
+      await vi.advanceTimersByTimeAsync(1);
 
       expect(client.isConnected()).toBe(true);
     });
@@ -245,7 +245,7 @@ describe('SignalingClient', () => {
     it('closes connection and clears state', async () => {
       const client = new SignalingClient({ url: 'ws://test:8080/ws' });
       client.connect();
-      await vi.runAllTimersAsync();
+      await vi.advanceTimersByTimeAsync(1);
       mockWs.simulateMessage({ type: 'connected', clientId: 'test' });
       client.joinRoom('room1');
 
@@ -261,7 +261,7 @@ describe('SignalingClient', () => {
     it('attempts reconnect on close with exponential backoff', async () => {
       const client = new SignalingClient({ url: 'ws://test:8080/ws' });
       client.connect();
-      await vi.runAllTimersAsync();
+      await vi.advanceTimersByTimeAsync(1);
       mockWs.simulateMessage({ type: 'connected', clientId: 'test' });
 
       const wsSpy = vi.spyOn(globalThis, 'WebSocket' as never);

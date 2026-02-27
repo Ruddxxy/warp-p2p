@@ -113,10 +113,12 @@ describe('useTransferStore', () => {
       initEngine('ws://test:8080/ws');
 
       const file = new File(['test'], 'test.txt');
-      await expect(createRoom(file)).rejects.toThrow('Test error');
+      const result = await createRoom(file);
 
+      expect(result).toBe('');
       expect(useTransferStore.getState().error).toBe('Test error');
       expect(useTransferStore.getState().state).toBe('error');
+      expect(useTransferStore.getState().appError).not.toBeNull();
     });
   });
 

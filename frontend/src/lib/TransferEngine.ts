@@ -13,10 +13,14 @@
 import streamSaver from 'streamsaver';
 import { SignalingClient, SignalingMessage } from './SignalingClient';
 import { SecurityManager, HandshakeMessage, generateRoomCode } from './Security';
+import { StreamingHasher } from './StreamingHasher';
 import {
   MAX_FILE_SIZE,
   FileSizeError,
-  type FileMetadata
+  type FileMetadata,
+  type TransferRole,
+  type TransferState,
+  type TransferProgress
 } from '../types';
 
 // Configure StreamSaver (use local service worker for better compatibility)
@@ -52,25 +56,6 @@ const getIceServers = (): RTCIceServer[] => {
   return servers;
 };
 
-export type TransferRole = 'sender' | 'receiver';
-export type TransferState =
-  | 'idle'
-  | 'connecting'
-  | 'handshaking'
-  | 'ready'
-  | 'transferring'
-  | 'completed'
-  | 'error';
-
-export interface TransferProgress {
-  bytesTransferred: number;
-  totalBytes: number;
-  percentage: number;
-  speed: number; // bytes per second
-  speedHistory: number[]; // Last N speed samples for graphing
-  eta: number; // seconds remaining
-}
-
 export interface TransferEngineEvents {
   onStateChange?: (state: TransferState) => void;
   onProgress?: (progress: TransferProgress) => void;
@@ -90,25 +75,9 @@ interface DataMessage {
   status?: 'verified' | 'failed';
 }
 
-// Utility: Convert ArrayBuffer to hex string
-function arrayBufferToHex(buffer: ArrayBuffer): string {
-  const bytes = new Uint8Array(buffer);
-  return Array.from(bytes)
-    .map((b) => b.toString(16).padStart(2, '0'))
-    .join('');
-}
-
-// Compute SHA-256 hash of file (streaming for large files)
+// Compute SHA-256 hash of file using streaming (constant ~1MB memory)
 async function computeFileHash(file: File): Promise<string> {
-  // For files under 100MB, hash entire file at once
-  if (file.size <= HASH_CHUNK_SIZE * 100) {
-    const buffer = await file.arrayBuffer();
-    const hashBuffer = await crypto.subtle.digest('SHA-256', buffer);
-    return arrayBufferToHex(hashBuffer);
-  }
-
-  // For larger files, process in chunks and combine
-  const chunks: Uint8Array[] = [];
+  const hasher = new StreamingHasher();
   const totalChunks = Math.ceil(file.size / HASH_CHUNK_SIZE);
 
   for (let i = 0; i < totalChunks; i++) {
@@ -116,20 +85,10 @@ async function computeFileHash(file: File): Promise<string> {
     const end = Math.min(start + HASH_CHUNK_SIZE, file.size);
     const chunk = file.slice(start, end);
     const buffer = await chunk.arrayBuffer();
-    chunks.push(new Uint8Array(buffer));
+    hasher.update(new Uint8Array(buffer));
   }
 
-  // Concatenate and hash
-  const totalLength = chunks.reduce((acc, c) => acc + c.length, 0);
-  const combined = new Uint8Array(totalLength);
-  let offset = 0;
-  for (const chunk of chunks) {
-    combined.set(chunk, offset);
-    offset += chunk.length;
-  }
-
-  const hashBuffer = await crypto.subtle.digest('SHA-256', combined);
-  return arrayBufferToHex(hashBuffer);
+  return hasher.digest();
 }
 
 export class TransferEngine {
@@ -148,13 +107,18 @@ export class TransferEngine {
   private fileMetadata: FileMetadata | null = null;
   private bytesTransferred = 0;
   private speedHistory: number[] = [];
+  private speedSum = 0;
   private lastSpeedUpdate = 0;
   private lastBytesForSpeed = 0;
 
   // Receiver streaming & verification
   private writeStream: WritableStream | null = null;
   private writer: WritableStreamDefaultWriter | null = null;
-  private receivedChunks: Uint8Array[] = [];
+  private streamingHasher: StreamingHasher | null = null;
+
+  // Flag to track when transfer is logically complete (all data sent/received)
+  // Used to ignore cleanup-related errors
+  private transferLogicallyComplete = false;
 
   constructor(signalingUrl: string, events: TransferEngineEvents = {}) {
     this.events = events;
@@ -403,8 +367,8 @@ export class TransferEngine {
     };
 
     this.dataChannel.onerror = (error) => {
-      // Ignore errors after successful completion (cleanup race condition)
-      if (this.state === 'completed') {
+      // Ignore errors after successful completion or logical completion (cleanup race condition)
+      if (this.state === 'completed' || this.transferLogicallyComplete) {
         console.log('[Engine] Data channel error after completion (ignored):', error);
         return;
       }
@@ -413,13 +377,13 @@ export class TransferEngine {
     };
 
     this.dataChannel.onmessage = async (event) => {
-      await this.handleDataMessage(event.data);
+      try {
+        await this.handleDataMessage(event.data);
+      } catch (error) {
+        this.handleError(error instanceof Error ? error : new Error('Failed to handle data message'));
+      }
     };
 
-    // Handle backpressure
-    this.dataChannel.onbufferedamountlow = () => {
-      // Resume sending if we were paused
-    };
   }
 
   private async createOffer(): Promise<void> {
@@ -490,12 +454,15 @@ export class TransferEngine {
         this.dataChannel!.send(JSON.stringify({ type: 'ack' }));
       } else if (msg.type === 'ack' && this.role === 'sender') {
         // Receiver is ready, start sending
-        await this.startSending();
+        this.startSending().catch((err) => {
+          this.handleError(err instanceof Error ? err : new Error('Send failed'));
+        });
       } else if (msg.type === 'done') {
         // Transfer complete, verify and send receipt
         await this.finishReceiving();
       } else if (msg.type === 'receipt' && this.role === 'sender') {
         // Handle receipt from receiver
+        this.transferLogicallyComplete = true;
         if (msg.status === 'verified') {
           console.log('[Engine] Receipt confirmed - transfer verified');
           this.setState('completed');
@@ -518,8 +485,8 @@ export class TransferEngine {
     });
     this.writer = this.writeStream.getWriter();
 
-    // Clear received chunks array for hash verification
-    this.receivedChunks = [];
+    // Initialize streaming hasher for incremental hash verification
+    this.streamingHasher = new StreamingHasher();
 
     this.setState('transferring');
   }
@@ -541,7 +508,14 @@ export class TransferEngine {
       const encrypted = await this.securityManager.encryptChunk(buffer);
 
       // Wait for buffer to drain if needed (backpressure)
+      const backpressureStart = Date.now();
       while (this.dataChannel.bufferedAmount > BUFFER_THRESHOLD) {
+        if (this.dataChannel.readyState !== 'open') {
+          throw new Error('Data channel closed during transfer');
+        }
+        if (Date.now() - backpressureStart > 30_000) {
+          throw new Error('Transfer stalled - backpressure timeout');
+        }
         await new Promise((resolve) => setTimeout(resolve, 10));
       }
 
@@ -570,10 +544,8 @@ export class TransferEngine {
       const chunk = new Uint8Array(decrypted);
       console.log('[Engine] Chunk decrypted, size:', chunk.length);
 
-      // Store chunk for hash verification (only for files < 500MB to save memory)
-      if (this.fileMetadata && this.fileMetadata.size < 500 * 1024 * 1024) {
-        this.receivedChunks.push(chunk);
-      }
+      // Feed streaming hasher for incremental hash verification (constant memory)
+      this.streamingHasher?.update(chunk);
 
       // Write to file stream
       await this.writer.write(chunk);
@@ -587,30 +559,20 @@ export class TransferEngine {
   }
 
   private async finishReceiving(): Promise<void> {
+    this.transferLogicallyComplete = true;
+
     if (this.writer) {
       await this.writer.close();
       this.writer = null;
       this.writeStream = null;
     }
 
-    // Verify hash if available and file was small enough to store chunks
+    // Verify hash using streaming hasher (works for all file sizes including 0-byte)
     let verified = true;
-    if (this.fileMetadata?.hash && this.receivedChunks.length > 0) {
+    if (this.fileMetadata?.hash && this.streamingHasher) {
       console.log('[Engine] Verifying file hash...');
 
-      // Concatenate all chunks
-      const totalLength = this.receivedChunks.reduce((acc, c) => acc + c.length, 0);
-      const combined = new Uint8Array(totalLength);
-      let offset = 0;
-      for (const chunk of this.receivedChunks) {
-        combined.set(chunk, offset);
-        offset += chunk.length;
-      }
-
-      // Compute hash
-      const hashBuffer = await crypto.subtle.digest('SHA-256', combined);
-      const actualHash = arrayBufferToHex(hashBuffer);
-
+      const actualHash = this.streamingHasher.digest();
       verified = actualHash === this.fileMetadata.hash;
 
       if (verified) {
@@ -629,8 +591,8 @@ export class TransferEngine {
     };
     this.dataChannel!.send(JSON.stringify(receipt));
 
-    // Clear chunks from memory
-    this.receivedChunks = [];
+    // Release hasher
+    this.streamingHasher = null;
 
     if (verified) {
       this.setState('completed');
@@ -644,24 +606,25 @@ export class TransferEngine {
     const now = Date.now();
     const totalBytes = this.fileMetadata?.size ?? 0;
 
-    // Calculate speed (update every 200ms)
-    if (now - this.lastSpeedUpdate >= 200) {
-      const bytesDelta = this.bytesTransferred - this.lastBytesForSpeed;
-      const timeDelta = (now - this.lastSpeedUpdate) / 1000;
-      const speed = timeDelta > 0 ? bytesDelta / timeDelta : 0;
+    // Only recalculate speed and emit progress every 200ms
+    if (now - this.lastSpeedUpdate < 200) return;
 
-      this.speedHistory.push(speed);
-      if (this.speedHistory.length > 50) {
-        this.speedHistory.shift();
-      }
+    const bytesDelta = this.bytesTransferred - this.lastBytesForSpeed;
+    const timeDelta = (now - this.lastSpeedUpdate) / 1000;
+    const speed = timeDelta > 0 ? bytesDelta / timeDelta : 0;
 
-      this.lastSpeedUpdate = now;
-      this.lastBytesForSpeed = this.bytesTransferred;
+    this.speedHistory.push(speed);
+    this.speedSum += speed;
+    if (this.speedHistory.length > 50) {
+      this.speedSum -= this.speedHistory.shift()!;
     }
+
+    this.lastSpeedUpdate = now;
+    this.lastBytesForSpeed = this.bytesTransferred;
 
     const avgSpeed =
       this.speedHistory.length > 0
-        ? this.speedHistory.reduce((a, b) => a + b, 0) / this.speedHistory.length
+        ? this.speedSum / this.speedHistory.length
         : 0;
 
     const remaining = totalBytes - this.bytesTransferred;
@@ -688,8 +651,8 @@ export class TransferEngine {
   }
 
   private handleError(error: Error): void {
-    // Don't override completed state with error
-    if (this.state === 'completed') {
+    // Don't override completed state with error, or if transfer is logically complete
+    if (this.state === 'completed' || this.transferLogicallyComplete) {
       console.log('[Engine] Error after completion (ignored):', error.message);
       return;
     }
@@ -730,7 +693,8 @@ export class TransferEngine {
     this.fileMetadata = null;
     this.bytesTransferred = 0;
     this.speedHistory = [];
-    this.receivedChunks = [];
+    this.speedSum = 0;
+    this.streamingHasher = null;
   }
 
   // Cleanup on destroy
@@ -740,5 +704,5 @@ export class TransferEngine {
 }
 
 // Re-export types from types/index.ts for convenience
-export type { FileMetadata } from '../types';
+export type { FileMetadata, TransferRole, TransferState, TransferProgress } from '../types';
 export { MAX_FILE_SIZE, MAX_FILE_SIZE_DISPLAY, FileSizeError, formatFileSize } from '../types';

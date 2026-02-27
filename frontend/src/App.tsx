@@ -17,8 +17,9 @@ export default function App() {
     state,
     role,
     roomCode,
-    peerConnected,
     error,
+    appError,
+    connectionPhase,
     file,
     fileMetadata,
     progress,
@@ -73,14 +74,22 @@ export default function App() {
   const handleFileSelect = useCallback(
     async (selectedFile: File) => {
       setScreen('send');
-      await createRoom(selectedFile);
+      try {
+        await createRoom(selectedFile);
+      } catch {
+        // Error state managed by store
+      }
     },
     [createRoom]
   );
 
   const handleCodeSubmit = useCallback(
     async (code: string) => {
-      await joinRoom(code);
+      try {
+        await joinRoom(code);
+      } catch {
+        // Error state managed by store
+      }
     },
     [joinRoom]
   );
@@ -152,7 +161,7 @@ export default function App() {
         )}
       </AnimatePresence>
 
-      <main className="relative pt-24 pb-12 px-6 min-h-screen flex items-center justify-center">
+      <main className="relative pt-20 pb-8 px-4 md:pt-24 md:pb-12 md:px-6 min-h-screen flex items-center justify-center">
         <AnimatePresence mode="wait">
           {screen === 'landing' && (
             <motion.div
@@ -208,7 +217,7 @@ export default function App() {
                 code={roomCode}
                 fileName={file?.name ?? ''}
                 fileSize={file?.size ?? 0}
-                peerConnected={peerConnected}
+                connectionPhase={connectionPhase}
               />
 
               <motion.button
@@ -279,12 +288,27 @@ export default function App() {
       <AnimatePresence>
         {error && screen !== 'receive' && (
           <motion.div
-            className="fixed bottom-6 left-1/2 transform -translate-x-1/2 px-6 py-3 glass-panel border-red-500/30 bg-red-500/10 rounded-lg"
+            className="fixed bottom-6 left-4 right-4 md:left-1/2 md:right-auto md:transform md:-translate-x-1/2 max-w-md mx-auto px-5 py-4 glass-panel border-red-500/30 bg-red-500/10 rounded-lg z-50"
             initial={{ opacity: 0, y: 50 }}
             animate={{ opacity: 1, y: 0 }}
             exit={{ opacity: 0, y: 50 }}
           >
-            <p className="text-red-400 text-sm">{error}</p>
+            <p className="text-red-400 text-sm font-medium">
+              {appError?.message ?? error}
+            </p>
+            {appError?.suggestion && (
+              <p className="text-red-400/60 text-xs mt-1">{appError.suggestion}</p>
+            )}
+            {appError?.recoverable && (
+              <motion.button
+                onClick={handleReset}
+                className="mt-3 px-4 py-1.5 text-xs glass-button rounded text-red-400 border-red-500/30 hover:border-red-400/50"
+                whileHover={{ scale: 1.03 }}
+                whileTap={{ scale: 0.97 }}
+              >
+                Try Again
+              </motion.button>
+            )}
           </motion.div>
         )}
       </AnimatePresence>
