@@ -81,28 +81,28 @@ Object.defineProperty(navigator, 'onLine', {
   writable: true
 });
 
-// Mock localStorage
-const localStorageMock = {
+// Mock sessionStorage
+const sessionStorageMock = {
   store: {} as Record<string, string>,
-  getItem: vi.fn((key: string) => localStorageMock.store[key] ?? null),
+  getItem: vi.fn((key: string) => sessionStorageMock.store[key] ?? null),
   setItem: vi.fn((key: string, value: string) => {
-    localStorageMock.store[key] = value;
+    sessionStorageMock.store[key] = value;
   }),
   removeItem: vi.fn((key: string) => {
-    delete localStorageMock.store[key];
+    delete sessionStorageMock.store[key];
   }),
   clear: vi.fn(() => {
-    localStorageMock.store = {};
+    sessionStorageMock.store = {};
   })
 };
 
-Object.defineProperty(globalThis, 'localStorage', {
-  value: localStorageMock,
+Object.defineProperty(globalThis, 'sessionStorage', {
+  value: sessionStorageMock,
   writable: true
 });
 
 // Reset mocks between tests
 beforeEach(() => {
-  localStorageMock.clear();
+  sessionStorageMock.clear();
   vi.clearAllMocks();
 });
