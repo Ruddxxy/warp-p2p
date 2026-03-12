@@ -47,7 +47,8 @@ coverage/
 *.bak
 
 # Go specific
-server/server
+server/warp-lan-signaling
+server/signaling-server
 *.out
 __debug_bin*
 
@@ -68,3 +69,8 @@ __debug_bin*
 
 # Claude
 .claude/
+plan.md
+
+# Planning docs
+ROADMAP.md
+DEPLOY.md

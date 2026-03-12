@@ -2,7 +2,11 @@ package main
 
 import (
 	"context"
+	"crypto/hmac"
+	"crypto/sha1"
+	"encoding/base64"
 	"encoding/json"
+	"fmt"
 	"log/slog"
 	"net/http"
 	"os"
@@ -19,19 +23,21 @@ import (
 
 // RateLimiter limits connections per IP using Go 1.21+ slices package
 type RateLimiter struct {
-	mu       sync.Mutex
-	attempts map[string][]time.Time
-	limit    int
-	window   time.Duration
-	stopCh   chan struct{}
+	mu             sync.Mutex
+	attempts       map[string][]time.Time
+	limit          int
+	window         time.Duration
+	maxTrackedIPs  int
+	stopCh         chan struct{}
 }
 
 func NewRateLimiter(limit int, window time.Duration) *RateLimiter {
 	rl := &RateLimiter{
-		attempts: make(map[string][]time.Time),
-		limit:    limit,
-		window:   window,
-		stopCh:   make(chan struct{}),
+		attempts:      make(map[string][]time.Time),
+		limit:         limit,
+		window:        window,
+		maxTrackedIPs: 50_000,
+		stopCh:        make(chan struct{}),
 	}
 	// Cleanup old entries periodically
 	go func() {
@@ -61,7 +67,12 @@ func (rl *RateLimiter) Allow(ip string) bool {
 	now := time.Now()
 	cutoff := now.Add(-rl.window)
 
-	attempts := rl.attempts[ip]
+	attempts, exists := rl.attempts[ip]
+
+	// Reject unknown IPs when map is at capacity to prevent OOM under IP-spray attacks
+	if !exists && len(rl.attempts) >= rl.maxTrackedIPs {
+		return false
+	}
 
 	// Binary search for cutoff point using slices package (Go 1.21+)
 	idx, _ := slices.BinarySearchFunc(attempts, cutoff, func(t, cutoff time.Time) int {
@@ -130,18 +141,21 @@ func (m *ServerMetrics) GetMetrics(hub *Hub) map[string]any {
 	}
 }
 
-// Extract client IP from request
+// Extract client IP from request.
+// Uses rightmost X-Forwarded-For entry (last proxy hop) to prevent client-side spoofing.
 func getClientIP(r *http.Request) string {
-	// Check X-Forwarded-For for proxied requests (Railway, etc.)
 	if forwarded := r.Header.Get("X-Forwarded-For"); forwarded != "" {
 		parts := strings.Split(forwarded, ",")
-		return strings.TrimSpace(parts[0])
+		for i := len(parts) - 1; i >= 0; i-- {
+			ip := strings.TrimSpace(parts[i])
+			if ip != "" {
+				return ip
+			}
+		}
 	}
-	// Check X-Real-IP
 	if realIP := r.Header.Get("X-Real-IP"); realIP != "" {
-		return realIP
+		return strings.TrimSpace(realIP)
 	}
-	// Fall back to RemoteAddr
 	return strings.Split(r.RemoteAddr, ":")[0]
 }
 
@@ -152,7 +166,7 @@ func setSecurityHeaders(w http.ResponseWriter) {
 			"script-src 'self' 'unsafe-inline'; "+
 			"style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; "+
 			"font-src 'self' https://fonts.gstatic.com; "+
-			"connect-src 'self' wss://*.railway.app wss://localhost:* ws://localhost:*; "+
+			"connect-src 'self' wss://*.b4a.run wss://localhost:* ws://localhost:*; "+
 			"img-src 'self' data: blob:; "+
 			"frame-ancestors 'none'; "+
 			"base-uri 'self';")
@@ -161,6 +175,7 @@ func setSecurityHeaders(w http.ResponseWriter) {
 	w.Header().Set("X-XSS-Protection", "1; mode=block")
 	w.Header().Set("Referrer-Policy", "strict-origin-when-cross-origin")
 	w.Header().Set("Permissions-Policy", "geolocation=(), microphone=(), camera=()")
+	w.Header().Set("Strict-Transport-Security", "max-age=31536000; includeSubDomains")
 }
 
 func setCORSHeaders(w http.ResponseWriter, r *http.Request) {
@@ -181,6 +196,58 @@ func setCORSHeaders(w http.ResponseWriter, r *http.Request) {
 
 	w.Header().Set("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
 	w.Header().Set("Access-Control-Allow-Headers", "Content-Type")
+}
+
+// NewTurnHandler creates the /turn-credentials handler. Generates time-limited
+// HMAC-SHA1 credentials for Coturn (or any TURN server using shared-secret auth).
+// Returns empty iceServers array if TURN_URL/TURN_SECRET are not configured.
+func NewTurnHandler(rl *RateLimiter) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		setCORSHeaders(w, r)
+		setSecurityHeaders(w)
+		w.Header().Set("Content-Type", "application/json")
+
+		if r.Method == "OPTIONS" {
+			w.WriteHeader(http.StatusOK)
+			return
+		}
+
+		clientIP := getClientIP(r)
+		if !rl.Allow(clientIP) {
+			http.Error(w, "Too many requests", http.StatusTooManyRequests)
+			return
+		}
+
+		turnURL := os.Getenv("TURN_URL")
+		turnSecret := os.Getenv("TURN_SECRET")
+
+		type iceServer struct {
+			URLs       string `json:"urls"`
+			Username   string `json:"username,omitempty"`
+			Credential string `json:"credential,omitempty"`
+		}
+		type response struct {
+			IceServers []iceServer `json:"iceServers"`
+		}
+
+		if turnURL == "" || turnSecret == "" {
+			json.NewEncoder(w).Encode(response{IceServers: []iceServer{}})
+			return
+		}
+
+		expiry := time.Now().Add(12 * time.Hour).Unix()
+		username := fmt.Sprintf("%d:warp-lan", expiry)
+
+		mac := hmac.New(sha1.New, []byte(turnSecret))
+		mac.Write([]byte(username))
+		credential := base64.StdEncoding.EncodeToString(mac.Sum(nil))
+
+		json.NewEncoder(w).Encode(response{
+			IceServers: []iceServer{
+				{URLs: turnURL, Username: username, Credential: credential},
+			},
+		})
+	}
 }
 
 var upgrader = websocket.Upgrader{
@@ -206,8 +273,9 @@ var upgrader = websocket.Upgrader{
 	},
 }
 
-// Global rate limiter: 5 connections per minute per IP (security audit recommendation)
-var rateLimiter = NewRateLimiter(5, time.Minute)
+// Global rate limiter: 20 connections per minute per IP
+// 1 connection + 5 reconnects = 6 per session; two users behind same NAT = 12; with retry = 18
+var rateLimiter = NewRateLimiter(20, time.Minute)
 
 func main() {
 	// Setup structured logging with slog (Go 1.21+)
@@ -243,6 +311,8 @@ func main() {
 		json.NewEncoder(w).Encode(metrics.GetMetrics(hub))
 	})
 
+	http.HandleFunc("/turn-credentials", NewTurnHandler(rateLimiter))
+
 	// CORS middleware for preflight
 	http.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
 		setCORSHeaders(w, r)
@@ -260,10 +330,11 @@ func main() {
 	}
 
 	server := &http.Server{
-		Addr:         ":" + port,
-		ReadTimeout:  15 * time.Second,
-		WriteTimeout: 15 * time.Second,
-		IdleTimeout:  60 * time.Second,
+		Addr:           ":" + port,
+		ReadTimeout:    15 * time.Second,
+		WriteTimeout:   15 * time.Second,
+		IdleTimeout:    60 * time.Second,
+		MaxHeaderBytes: 1 << 20, // 1 MB
 	}
 
 	// Start server in goroutine

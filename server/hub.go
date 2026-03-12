@@ -4,12 +4,16 @@ import (
 	"context"
 	"encoding/json"
 	"log/slog"
+	"regexp"
 	"sync"
 	"time"
 
 	"github.com/google/uuid"
 	"github.com/gorilla/websocket"
 )
+
+// roomIDPattern validates room codes: 3 digits, dash, 3 digits
+var roomIDPattern = regexp.MustCompile(`^\d{3}-\d{3}$`)
 
 const (
 	writeWait        = 10 * time.Second
@@ -47,12 +51,16 @@ type SignalingMessage struct {
 
 // Client represents a connected WebSocket client
 type Client struct {
-	ID     string
-	RoomID string
-	Conn   *websocket.Conn
-	Hub    *Hub
-	Send   chan []byte
-	mu     sync.Mutex
+	ID        string
+	RoomID    string
+	Conn      *websocket.Conn
+	Hub       *Hub
+	Send      chan []byte
+	mu        sync.Mutex
+	closeSend sync.Once
+	// Per-client message rate limiting
+	msgCount  int
+	msgWindow time.Time
 }
 
 // Room represents a transfer session between peers
@@ -78,8 +86,8 @@ func NewHub() *Hub {
 	return &Hub{
 		rooms:      make(map[string]*Room),
 		clients:    make(map[string]*Client),
-		register:   make(chan *Client),
-		unregister: make(chan *Client),
+		register:   make(chan *Client, 64),
+		unregister: make(chan *Client, 64),
 		broadcast:  make(chan *SignalingMessage, 256),
 	}
 }
@@ -95,7 +103,10 @@ func (h *Hub) Run(ctx context.Context) {
 			slog.Info("Hub shutting down")
 			h.mu.Lock()
 			for _, client := range h.clients {
-				close(client.Send)
+				client.closeSend.Do(func() { close(client.Send) })
+				// Drain buffered messages to prevent goroutine leaks
+				for range client.Send {
+				}
 			}
 			h.mu.Unlock()
 			return
@@ -131,12 +142,14 @@ func (h *Hub) cleanupExpiredRooms(ctx context.Context) {
 							Type:   MsgTypeRoomExpired,
 							RoomID: roomID,
 						}
-						data, _ := json.Marshal(msg)
-						select {
-						case client.Send <- data:
-						default:
+						data, err := json.Marshal(msg)
+						if err != nil {
+							slog.Error("Failed to marshal room-expired message",
+								slog.String("error", err.Error()))
+							continue
 						}
-						client.RoomID = ""
+						client.trySend(data)
+						client.setRoomID("")
 					}
 					room.mu.Unlock()
 
@@ -164,8 +177,13 @@ func (h *Hub) handleRegister(client *Client) {
 		Type:     MsgTypeConnected,
 		ClientID: client.ID,
 	}
-	data, _ := json.Marshal(msg)
-	client.Send <- data
+	data, err := json.Marshal(msg)
+	if err != nil {
+		slog.Error("Failed to marshal connected message",
+			slog.String("error", err.Error()))
+		return
+	}
+	client.trySend(data)
 }
 
 func (h *Hub) handleUnregister(client *Client) {
@@ -174,11 +192,12 @@ func (h *Hub) handleUnregister(client *Client) {
 
 	if _, ok := h.clients[client.ID]; ok {
 		delete(h.clients, client.ID)
-		close(client.Send)
+		client.closeSend.Do(func() { close(client.Send) })
 
 		// Remove from room if in one
-		if client.RoomID != "" {
-			if room, ok := h.rooms[client.RoomID]; ok {
+		roomID := client.getRoomID()
+		if roomID != "" {
+			if room, ok := h.rooms[roomID]; ok {
 				room.mu.Lock()
 				delete(room.Clients, client.ID)
 
@@ -187,21 +206,23 @@ func (h *Hub) handleUnregister(client *Client) {
 					msg := SignalingMessage{
 						Type:     MsgTypePeerLeft,
 						From:     client.ID,
-						RoomID:   client.RoomID,
+						RoomID:   roomID,
 						ClientID: client.ID,
 					}
-					data, _ := json.Marshal(msg)
-					select {
-					case peer.Send <- data:
-					default:
+					data, err := json.Marshal(msg)
+					if err != nil {
+						slog.Error("Failed to marshal peer-left message",
+							slog.String("error", err.Error()))
+						continue
 					}
+					peer.trySend(data)
 				}
 
 				// Clean up empty rooms
 				if len(room.Clients) == 0 {
-					delete(h.rooms, client.RoomID)
+					delete(h.rooms, roomID)
 					slog.Info("Room deleted (empty)",
-						slog.String("roomId", client.RoomID))
+						slog.String("roomId", roomID))
 				}
 				room.mu.Unlock()
 			}
@@ -217,11 +238,23 @@ func (h *Hub) handleBroadcast(message *SignalingMessage) {
 
 	// Direct message to specific client
 	if message.To != "" {
+		// SECURITY: verify target client is in the same room as the sender
 		if client, ok := h.clients[message.To]; ok {
-			data, _ := json.Marshal(message)
-			select {
-			case client.Send <- data:
-			default:
+			if message.RoomID == "" || client.getRoomID() != message.RoomID {
+				slog.Warn("Cross-room direct message blocked",
+					slog.String("from", message.From),
+					slog.String("to", message.To),
+					slog.String("senderRoom", message.RoomID),
+					slog.String("targetRoom", client.getRoomID()))
+				return
+			}
+			data, err := json.Marshal(message)
+			if err != nil {
+				slog.Error("Failed to marshal direct message",
+					slog.String("error", err.Error()))
+				return
+			}
+			if !client.trySend(data) {
 				slog.Warn("Failed to send to client, buffer full",
 					slog.String("clientId", message.To))
 			}
@@ -233,12 +266,16 @@ func (h *Hub) handleBroadcast(message *SignalingMessage) {
 	if message.RoomID != "" {
 		if room, ok := h.rooms[message.RoomID]; ok {
 			room.mu.RLock()
-			data, _ := json.Marshal(message)
+			data, err := json.Marshal(message)
+			if err != nil {
+				slog.Error("Failed to marshal broadcast message",
+					slog.String("error", err.Error()))
+				room.mu.RUnlock()
+				return
+			}
 			for id, client := range room.Clients {
 				if id != message.From { // Don't echo back to sender
-					select {
-					case client.Send <- data:
-					default:
+					if !client.trySend(data) {
 						slog.Warn("Failed to broadcast to client",
 							slog.String("clientId", id))
 					}
@@ -255,8 +292,9 @@ func (h *Hub) JoinRoom(client *Client, roomID string) {
 	defer h.mu.Unlock()
 
 	// Leave current room if in one
-	if client.RoomID != "" && client.RoomID != roomID {
-		if oldRoom, ok := h.rooms[client.RoomID]; ok {
+	currentRoomID := client.getRoomID()
+	if currentRoomID != "" && currentRoomID != roomID {
+		if oldRoom, ok := h.rooms[currentRoomID]; ok {
 			oldRoom.mu.Lock()
 			delete(oldRoom.Clients, client.ID)
 			oldRoom.mu.Unlock()
@@ -276,8 +314,16 @@ func (h *Hub) JoinRoom(client *Client, roomID string) {
 			slog.String("roomId", roomID))
 	}
 
-	// Add client to room
+	// Enforce room capacity: P2P transfer is strictly 2 peers
 	room.mu.Lock()
+	if len(room.Clients) >= 2 {
+		room.mu.Unlock()
+		client.sendError("Room is full")
+		slog.Warn("Room capacity exceeded",
+			slog.String("roomId", roomID),
+			slog.String("clientId", client.ID))
+		return
+	}
 
 	// Notify existing peers
 	for _, peer := range room.Clients {
@@ -287,15 +333,17 @@ func (h *Hub) JoinRoom(client *Client, roomID string) {
 			RoomID:   roomID,
 			ClientID: client.ID,
 		}
-		data, _ := json.Marshal(msg)
-		select {
-		case peer.Send <- data:
-		default:
+		data, err := json.Marshal(msg)
+		if err != nil {
+			slog.Error("Failed to marshal peer-joined message",
+				slog.String("error", err.Error()))
+			continue
 		}
+		peer.trySend(data)
 	}
 
 	room.Clients[client.ID] = client
-	client.RoomID = roomID
+	client.setRoomID(roomID)
 	room.mu.Unlock()
 
 	slog.Info("Client joined room",
@@ -307,7 +355,7 @@ func (h *Hub) JoinRoom(client *Client, roomID string) {
 // NewClient creates a new client with unique ID
 func NewClient(conn *websocket.Conn, hub *Hub) *Client {
 	return &Client{
-		ID:   uuid.New().String()[:8], // Short ID for easier debugging
+		ID:   uuid.New().String(),
 		Conn: conn,
 		Hub:  hub,
 		Send: make(chan []byte, 256),
@@ -339,6 +387,20 @@ func (c *Client) ReadPump() {
 			break
 		}
 
+		// Per-client message rate limiting: max 50 messages per second
+		now := time.Now()
+		if now.Sub(c.msgWindow) > time.Second {
+			c.msgCount = 0
+			c.msgWindow = now
+		}
+		c.msgCount++
+		if c.msgCount > 50 {
+			slog.Warn("Client exceeded message rate limit",
+				slog.String("clientId", c.ID))
+			c.sendError("Rate limit exceeded")
+			break // disconnect flooding client
+		}
+
 		var msg SignalingMessage
 		if err := json.Unmarshal(data, &msg); err != nil {
 			slog.Warn("Invalid JSON from client",
@@ -358,13 +420,20 @@ func (c *Client) ReadPump() {
 				c.sendError("Room ID required for handshake")
 				continue
 			}
+			if !roomIDPattern.MatchString(msg.RoomID) {
+				c.sendError("Invalid room ID format")
+				continue
+			}
 			c.Hub.JoinRoom(c, msg.RoomID)
 
 		case MsgTypeOffer, MsgTypeAnswer, MsgTypeICECandidate, MsgTypeHandshakeVerify:
-			// Forward to specific peer or broadcast to room
-			if msg.To == "" && msg.RoomID == "" {
-				msg.RoomID = c.RoomID
+			// Always stamp the sender's room to prevent cross-room injection
+			senderRoom := c.getRoomID()
+			if senderRoom == "" {
+				c.sendError("Must join a room before sending messages")
+				continue
 			}
+			msg.RoomID = senderRoom
 			c.Hub.broadcast <- &msg
 
 		default:
@@ -410,14 +479,53 @@ func (c *Client) WritePump() {
 	}
 }
 
-func (c *Client) sendError(errMsg string) {
-	msg := SignalingMessage{
-		Type:    MsgTypeError,
-		Payload: json.RawMessage(`"` + errMsg + `"`),
-	}
-	data, _ := json.Marshal(msg)
+// getRoomID returns the client's room ID in a thread-safe manner.
+func (c *Client) getRoomID() string {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.RoomID
+}
+
+// setRoomID updates the client's room ID in a thread-safe manner.
+func (c *Client) setRoomID(id string) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.RoomID = id
+}
+
+// trySend safely sends data to the client's Send channel.
+// Returns false if the channel is closed or full, preventing panics
+// from the race between cleanupExpiredRooms and handleUnregister.
+func (c *Client) trySend(data []byte) (sent bool) {
+	defer func() {
+		if r := recover(); r != nil {
+			sent = false
+		}
+	}()
 	select {
 	case c.Send <- data:
+		return true
 	default:
+		return false
 	}
+}
+
+func (c *Client) sendError(errMsg string) {
+	payloadBytes, err := json.Marshal(errMsg)
+	if err != nil {
+		slog.Error("Failed to marshal error payload",
+			slog.String("error", err.Error()))
+		return
+	}
+	msg := SignalingMessage{
+		Type:    MsgTypeError,
+		Payload: json.RawMessage(payloadBytes),
+	}
+	data, err := json.Marshal(msg)
+	if err != nil {
+		slog.Error("Failed to marshal error message",
+			slog.String("error", err.Error()))
+		return
+	}
+	c.trySend(data)
 }

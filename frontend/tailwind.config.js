@@ -7,65 +7,33 @@ export default {
   theme: {
     extend: {
       fontFamily: {
-        mono: ['JetBrains Mono', 'monospace']
+        sans: ['Inter', 'system-ui', '-apple-system', 'sans-serif'],
+        mono: ['JetBrains Mono', 'ui-monospace', 'monospace']
       },
       colors: {
-        'matrix': {
-          DEFAULT: '#00ff41',
-          50: 'rgba(0, 255, 65, 0.05)',
-          100: 'rgba(0, 255, 65, 0.1)',
-          200: 'rgba(0, 255, 65, 0.2)',
-          300: 'rgba(0, 255, 65, 0.3)',
-          400: 'rgba(0, 255, 65, 0.4)',
-          500: 'rgba(0, 255, 65, 0.5)',
-          600: 'rgba(0, 255, 65, 0.6)',
-          700: 'rgba(0, 255, 65, 0.7)',
-          800: 'rgba(0, 255, 65, 0.8)',
-          900: 'rgba(0, 255, 65, 0.9)',
-          glow: 'rgba(0, 255, 65, 0.3)'
-        }
-      },
-      animation: {
-        'pulse-slow': 'pulse 3s cubic-bezier(0.4, 0, 0.6, 1) infinite',
-        'glow-pulse': 'glow-pulse 2s ease-in-out infinite',
-        'float': 'float 3s ease-in-out infinite',
-        'shimmer': 'shimmer 2s ease-in-out infinite',
-        'gradient-rotate': 'gradient-rotate 4s linear infinite'
-      },
-      keyframes: {
-        'glow-pulse': {
-          '0%, 100%': {
-            boxShadow: '0 0 20px rgba(0, 255, 65, 0.3)'
-          },
-          '50%': {
-            boxShadow: '0 0 40px rgba(0, 255, 65, 0.5)'
-          }
+        bg: '#0A0A0F',
+        surface: '#16161D',
+        border: '#2A2A35',
+        'border-hover': '#3A3A48',
+        primary: {
+          DEFAULT: '#6366F1',
+          hover: '#818CF8',
+          muted: 'rgba(99, 102, 241, 0.15)',
         },
-        'float': {
-          '0%, 100%': { transform: 'translateY(0)' },
-          '50%': { transform: 'translateY(-10px)' }
+        success: {
+          DEFAULT: '#22C55E',
+          muted: 'rgba(34, 197, 94, 0.15)',
         },
-        'shimmer': {
-          '0%': { backgroundPosition: '-200% 0' },
-          '100%': { backgroundPosition: '200% 0' }
-        }
+        error: {
+          DEFAULT: '#EF4444',
+          muted: 'rgba(239, 68, 68, 0.15)',
+        },
+        text: {
+          DEFAULT: '#F4F4F5',
+          muted: '#A1A1AA',
+          faint: '#71717A',
+        },
       },
-      backdropBlur: {
-        'xs': '2px',
-        '3xl': '64px',
-        '4xl': '80px'
-      },
-      boxShadow: {
-        'glow': '0 0 20px rgba(0, 255, 65, 0.3)',
-        'glow-lg': '0 0 40px rgba(0, 255, 65, 0.4)',
-        'glow-xl': '0 0 60px rgba(0, 255, 65, 0.5)',
-        'inner-glow': 'inset 0 0 20px rgba(0, 255, 65, 0.1)',
-        'glass': '0 8px 32px rgba(0, 0, 0, 0.4), inset 0 1px 0 rgba(0, 255, 65, 0.1)'
-      },
-      backgroundImage: {
-        'glass-gradient': 'linear-gradient(135deg, rgba(0, 255, 65, 0.08) 0%, rgba(0, 0, 0, 0.6) 50%, rgba(0, 255, 65, 0.04) 100%)',
-        'glow-radial': 'radial-gradient(circle, rgba(0, 255, 65, 0.15) 0%, transparent 70%)'
-      }
     }
   },
   plugins: []

@@ -1,5 +1,5 @@
 # Build stage
-FROM golang:1.21-alpine AS builder
+FROM golang:1.25-alpine AS builder
 
 WORKDIR /app
 
@@ -16,8 +16,14 @@ COPY server/*.go ./
 # Build static binary
 RUN CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -ldflags="-w -s" -o signaling-server .
 
+# Create non-root user
+RUN addgroup -g 65534 -S app && adduser -u 65534 -S app -G app
+
 # Production stage - scratch for minimal image
 FROM scratch
+
+# Copy passwd for non-root user
+COPY --from=builder /etc/passwd /etc/passwd
 
 # Copy certificates
 COPY --from=builder /etc/ssl/certs/ca-certificates.crt /etc/ssl/certs/
@@ -25,8 +31,10 @@ COPY --from=builder /etc/ssl/certs/ca-certificates.crt /etc/ssl/certs/
 # Copy binary
 COPY --from=builder /app/signaling-server /signaling-server
 
-# Expose port (Railway will set PORT env var)
+# Run as non-root
+USER app
+
+# Expose port (hosting platform sets PORT env var)
 EXPOSE 8080
 
-# Run
 ENTRYPOINT ["/signaling-server"]

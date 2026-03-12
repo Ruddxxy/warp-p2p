@@ -1,0 +1,58 @@
+# Warp
+
+Warp is a free, open-source, peer-to-peer file transfer tool that runs in your browser. Files are encrypted end-to-end with AES-256-GCM and sent directly between devices using WebRTC. No account, no server storage, no tracking. Supports files up to 25 GB.
+
+## Key Pages
+
+- [Homepage](https://warp-lan.vercel.app/): Send files instantly — peer-to-peer, encrypted, no signup
+
+## How It Works
+
+1. The sender opens Warp and selects a file
+2. A 6-digit room code is generated
+3. The receiver enters the code on their device
+4. A PAKE handshake verifies both parties and derives an encryption key
+5. The file transfers directly between devices via WebRTC data channel
+6. SHA-256 hash verification confirms file integrity
+
+## Security
+
+- AES-256-GCM encryption for all file data
+- PAKE (Password-Authenticated Key Exchange) prevents man-in-the-middle attacks
+- HKDF key derivation from shared secret
+- SHA-256 streaming hash for integrity verification
+- No file data touches any server — direct peer-to-peer via WebRTC
+- Room codes expire after 10 minutes
+- Rate limiting protects against brute force
+
+## FAQ
+
+### What is Warp?
+Warp is a free web app for transferring files directly between two devices using peer-to-peer encryption. No account or installation needed.
+
+### Is my data encrypted?
+Yes. All transfers use AES-256-GCM end-to-end encryption. The encryption key is derived from a shared secret via PAKE — the server never sees it.
+
+### What is the file size limit?
+You can transfer files up to 25 GB per session.
+
+### Do I need to create an account?
+No. Warp requires no signup, login, or personal information.
+
+### Does the server store my files?
+No. Files transfer directly between devices via WebRTC. The server only relays signaling messages (room codes, connection metadata).
+
+### What browsers are supported?
+Any modern browser with WebRTC support: Chrome, Firefox, Safari, Edge on desktop and mobile.
+
+### Is Warp open source?
+Yes. The source code is available on GitHub.
+
+### How is this different from WeTransfer or AirDrop?
+Unlike WeTransfer, files never touch a server — they go directly between devices. Unlike AirDrop, Warp works on any platform and any browser, not just Apple devices.
+
+### Can I use Warp on mobile?
+Yes. Warp works in mobile browsers. On the receiving side, files are saved via the browser's download mechanism.
+
+### What happens if the connection drops?
+The transfer stops. You need to start a new session with a fresh room code. Partial transfers are not resumable.

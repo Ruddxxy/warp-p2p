@@ -9,13 +9,15 @@
  * 4. Final session key is derived from ECDH + code verification
  */
 
-// Generate a random room code (e.g., "74-29")
+import { logger } from './logger';
+
+// Generate a random room code (e.g., "742-291") — 6 digits = 1M combinations
 export function generateRoomCode(): string {
   const array = new Uint8Array(4);
   crypto.getRandomValues(array);
-  const num1 = (array[0] << 8 | array[1]) % 100;
-  const num2 = (array[2] << 8 | array[3]) % 100;
-  return `${num1.toString().padStart(2, '0')}-${num2.toString().padStart(2, '0')}`;
+  const num1 = (array[0] << 8 | array[1]) % 1000;
+  const num2 = (array[2] << 8 | array[3]) % 1000;
+  return `${num1.toString().padStart(3, '0')}-${num2.toString().padStart(3, '0')}`;
 }
 
 // Derive a key from the room code using PBKDF2
@@ -234,7 +236,7 @@ export class SecurityManager {
       const isValid = await verifyHMAC(this.state.codeKey, dataToVerify.buffer, peerSignature);
 
       if (!isValid) {
-        console.error('[Security] Handshake verification failed - wrong code?');
+        logger.error('Security', 'Handshake verification failed - wrong code?');
         return false;
       }
 
@@ -267,7 +269,7 @@ export class SecurityManager {
       this.state.verified = true;
       return true;
     } catch (error) {
-      console.error('[Security] Handshake processing failed:', error);
+      logger.error('Security', 'Handshake processing failed');
       return false;
     }
   }
@@ -291,15 +293,13 @@ export class SecurityManager {
   // Decrypt chunk from transfer
   async decryptChunk(data: ArrayBuffer): Promise<ArrayBuffer> {
     if (!this.state?.sessionKey) {
-      console.error('[Security] No session key established for decryption');
+      logger.error('Security', 'No session key established for decryption');
       throw new Error('No session key established');
     }
     try {
       return await decrypt(this.state.sessionKey, data);
     } catch (error) {
-      console.error('[Security] Decryption failed:', error);
-      console.error('[Security] Data size:', data.byteLength);
-      console.error('[Security] Session key exists:', !!this.state.sessionKey);
+      logger.error('Security', 'Decryption failed', { dataSize: data.byteLength, hasSessionKey: !!this.state.sessionKey });
       throw error;
     }
   }

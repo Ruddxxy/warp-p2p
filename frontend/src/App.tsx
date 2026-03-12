@@ -6,6 +6,7 @@ import { CodeDisplay } from './components/CodeDisplay';
 import { CodeInput } from './components/CodeInput';
 import { TransferView } from './components/TransferView';
 import { useTransferStore } from './lib/store';
+import { logger } from './lib/logger';
 
 type Screen = 'landing' | 'send' | 'receive' | 'transfer';
 
@@ -57,9 +58,9 @@ export default function App() {
       if ('wakeLock' in navigator && (state === 'transferring' || state === 'connecting')) {
         try {
           wakeLock = await navigator.wakeLock.request('screen');
-          console.log('[App] Wake lock acquired');
-        } catch (err) {
-          console.log('[App] Wake lock failed:', err);
+          logger.debug('App', 'Wake lock acquired');
+        } catch {
+          logger.debug('App', 'Wake lock not available');
         }
       }
     };
@@ -100,39 +101,14 @@ export default function App() {
   }, [reset]);
 
   return (
-    <div className="min-h-screen bg-gradient-to-br from-gray-950 via-black to-gray-900">
-      {/* Animated background grid */}
-      <div className="fixed inset-0 opacity-[0.15] pointer-events-none">
-        <div
-          className="absolute inset-0"
-          style={{
-            backgroundImage: `
-              linear-gradient(to right, #00ff41 1px, transparent 1px),
-              linear-gradient(to bottom, #00ff41 1px, transparent 1px)
-            `,
-            backgroundSize: '60px 60px'
-          }}
-        />
-      </div>
-
-      {/* Enhanced glow orbs */}
-      <motion.div
-        className="fixed top-1/4 left-1/4 w-[500px] h-[500px] bg-[#00ff41]/[0.06] rounded-full blur-[100px] pointer-events-none"
-        animate={{
-          scale: [1, 1.1, 1],
-          opacity: [0.06, 0.08, 0.06]
+    <div className="min-h-screen bg-bg">
+      {/* Subtle radial gradient */}
+      <div
+        className="fixed inset-0 pointer-events-none"
+        style={{
+          background: 'radial-gradient(ellipse 80% 50% at 50% 40%, rgba(99, 102, 241, 0.08) 0%, transparent 70%)'
         }}
-        transition={{ duration: 4, repeat: Infinity, ease: 'easeInOut' }}
       />
-      <motion.div
-        className="fixed bottom-1/4 right-1/4 w-[500px] h-[500px] bg-[#00ff41]/[0.05] rounded-full blur-[120px] pointer-events-none"
-        animate={{
-          scale: [1.1, 1, 1.1],
-          opacity: [0.05, 0.07, 0.05]
-        }}
-        transition={{ duration: 5, repeat: Infinity, ease: 'easeInOut' }}
-      />
-      <div className="fixed top-1/2 left-1/2 transform -translate-x-1/2 -translate-y-1/2 w-[800px] h-[800px] bg-[#00ff41]/[0.02] rounded-full blur-[150px] pointer-events-none" />
 
       <Header />
 
@@ -145,7 +121,7 @@ export default function App() {
             animate={{ opacity: 1, y: 0 }}
             exit={{ opacity: 0, y: -20 }}
           >
-            <div className="flex items-center gap-2 px-4 py-2 glass-panel border-yellow-500/30 bg-yellow-500/10 rounded-lg">
+            <div className="flex items-center gap-2 px-4 py-2 bg-yellow-500/10 border border-yellow-500/30 rounded-lg backdrop-blur-sm">
               <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#eab308" strokeWidth="2">
                 <line x1="1" y1="1" x2="23" y2="23" />
                 <path d="M16.72 11.06A10.94 10.94 0 0 1 19 12.55" />
@@ -166,19 +142,19 @@ export default function App() {
           {screen === 'landing' && (
             <motion.div
               key="landing"
-              className="w-full max-w-4xl flex flex-col items-center gap-8"
+              className="w-full max-w-xl flex flex-col items-center gap-8"
               initial={{ opacity: 0, y: 20 }}
               animate={{ opacity: 1, y: 0 }}
               exit={{ opacity: 0, y: -20 }}
               transition={{ duration: 0.3 }}
             >
               {/* Title */}
-              <div className="text-center mb-8">
-                <h2 className="text-3xl md:text-4xl font-bold text-[#00ff41] mb-4 text-glow">
-                  Secure File Transfer
+              <div className="text-center mb-4">
+                <h2 className="text-3xl md:text-4xl font-semibold text-text mb-3">
+                  Send files, instantly
                 </h2>
-                <p className="text-[#00ff41]/50 max-w-md mx-auto">
-                  End-to-end encrypted P2P transfer. No servers, no limits, no tracking.
+                <p className="text-text-muted max-w-sm mx-auto">
+                  Peer-to-peer. Encrypted. No signup.
                 </p>
               </div>
 
@@ -186,16 +162,16 @@ export default function App() {
               <DropZone onFileSelect={handleFileSelect} disabled={isOffline} />
 
               {/* Receive option */}
-              <div className="flex items-center gap-4 mt-8">
-                <div className="h-px w-12 bg-gradient-to-r from-transparent to-[#00ff41]/30" />
-                <span className="text-[#00ff41]/50 text-sm">or</span>
-                <div className="h-px w-12 bg-gradient-to-l from-transparent to-[#00ff41]/30" />
+              <div className="flex items-center gap-4 mt-4">
+                <div className="h-px w-12 bg-border" />
+                <span className="text-text-faint text-sm">or</span>
+                <div className="h-px w-12 bg-border" />
               </div>
 
               <motion.button
                 onClick={() => setScreen('receive')}
                 disabled={isOffline}
-                className="px-6 py-3 glass-button rounded-lg text-[#00ff41] disabled:opacity-50 disabled:cursor-not-allowed"
+                className="px-6 py-3 rounded-xl text-text-muted border border-border hover:border-primary hover:text-primary transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
                 whileHover={isOffline ? {} : { scale: 1.02 }}
                 whileTap={isOffline ? {} : { scale: 0.98 }}
               >
@@ -222,7 +198,7 @@ export default function App() {
 
               <motion.button
                 onClick={handleReset}
-                className="mt-4 px-4 py-2 text-[#00ff41]/50 hover:text-[#00ff41] text-sm transition-colors"
+                className="mt-4 px-4 py-2 text-text-faint hover:text-text-muted text-sm transition-colors"
                 whileHover={{ scale: 1.02 }}
               >
                 Cancel
@@ -247,7 +223,7 @@ export default function App() {
 
               <motion.button
                 onClick={handleReset}
-                className="mt-4 px-4 py-2 text-[#00ff41]/50 hover:text-[#00ff41] text-sm transition-colors"
+                className="mt-4 px-4 py-2 text-text-faint hover:text-text-muted text-sm transition-colors"
                 whileHover={{ scale: 1.02 }}
               >
                 Back
@@ -269,7 +245,7 @@ export default function App() {
               {state === 'completed' && (
                 <motion.button
                   onClick={handleReset}
-                  className="mt-4 px-6 py-3 glass-button rounded-lg text-[#00ff41]"
+                  className="mt-4 px-6 py-3 rounded-xl bg-primary/10 text-primary border border-primary/30 hover:bg-primary/20 transition-colors"
                   whileHover={{ scale: 1.02 }}
                   whileTap={{ scale: 0.98 }}
                   initial={{ opacity: 0, y: 20 }}
@@ -288,27 +264,29 @@ export default function App() {
       <AnimatePresence>
         {error && screen !== 'receive' && (
           <motion.div
-            className="fixed bottom-6 left-4 right-4 md:left-1/2 md:right-auto md:transform md:-translate-x-1/2 max-w-md mx-auto px-5 py-4 glass-panel border-red-500/30 bg-red-500/10 rounded-lg z-50"
+            className="fixed bottom-6 left-4 right-4 md:left-1/2 md:right-auto md:transform md:-translate-x-1/2 max-w-md mx-auto z-50"
             initial={{ opacity: 0, y: 50 }}
             animate={{ opacity: 1, y: 0 }}
             exit={{ opacity: 0, y: 50 }}
           >
-            <p className="text-red-400 text-sm font-medium">
-              {appError?.message ?? error}
-            </p>
-            {appError?.suggestion && (
-              <p className="text-red-400/60 text-xs mt-1">{appError.suggestion}</p>
-            )}
-            {appError?.recoverable && (
-              <motion.button
-                onClick={handleReset}
-                className="mt-3 px-4 py-1.5 text-xs glass-button rounded text-red-400 border-red-500/30 hover:border-red-400/50"
-                whileHover={{ scale: 1.03 }}
-                whileTap={{ scale: 0.97 }}
-              >
-                Try Again
-              </motion.button>
-            )}
+            <div className="px-5 py-4 bg-surface border border-error/30 rounded-xl shadow-lg">
+              <p className="text-error text-sm font-medium">
+                {appError?.message ?? error}
+              </p>
+              {appError?.suggestion && (
+                <p className="text-text-faint text-xs mt-1">{appError.suggestion}</p>
+              )}
+              {appError?.recoverable && (
+                <motion.button
+                  onClick={handleReset}
+                  className="mt-3 px-4 py-1.5 text-xs rounded-lg text-error border border-error/30 hover:bg-error/10 transition-colors"
+                  whileHover={{ scale: 1.03 }}
+                  whileTap={{ scale: 0.97 }}
+                >
+                  Try Again
+                </motion.button>
+              )}
+            </div>
           </motion.div>
         )}
       </AnimatePresence>

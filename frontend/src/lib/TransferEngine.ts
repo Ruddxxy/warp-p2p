@@ -14,9 +14,12 @@ import streamSaver from 'streamsaver';
 import { SignalingClient, SignalingMessage } from './SignalingClient';
 import { SecurityManager, HandshakeMessage, generateRoomCode } from './Security';
 import { StreamingHasher } from './StreamingHasher';
+import { logger } from './logger';
 import {
   MAX_FILE_SIZE,
+  MAX_FILE_SIZE_DISPLAY,
   FileSizeError,
+  formatFileSize,
   type FileMetadata,
   type TransferRole,
   type TransferState,
@@ -31,30 +34,40 @@ const CHUNK_SIZE = 64 * 1024; // 64KB chunks
 const BUFFER_THRESHOLD = 16 * 1024 * 1024; // 16MB buffer before backpressure
 const HASH_CHUNK_SIZE = 1024 * 1024; // 1MB chunks for hashing
 
-// ICE Server configuration with optional TURN support
-const getIceServers = (): RTCIceServer[] => {
-  const servers: RTCIceServer[] = [
-    { urls: 'stun:stun.l.google.com:19302' },
-    { urls: 'stun:stun1.l.google.com:19302' },
-    { urls: 'stun:stun2.l.google.com:19302' }
-  ];
+// Default STUN servers (always included)
+const DEFAULT_STUN_SERVERS: RTCIceServer[] = [
+  { urls: 'stun:stun.l.google.com:19302' },
+  { urls: 'stun:stun1.l.google.com:19302' },
+  { urls: 'stun:stun2.l.google.com:19302' }
+];
 
-  // Add TURN server if configured via environment
-  const turnUrl = import.meta.env.VITE_TURN_URL as string | undefined;
-  const turnUsername = import.meta.env.VITE_TURN_USERNAME as string | undefined;
-  const turnCredential = import.meta.env.VITE_TURN_CREDENTIAL as string | undefined;
+// Fetch ICE servers including TURN credentials from the signaling server.
+// Falls back to STUN-only on any error (graceful degradation).
+async function getIceServers(signalingUrl: string): Promise<RTCIceServer[]> {
+  try {
+    const httpUrl = signalingUrl
+      .replace('wss://', 'https://')
+      .replace('ws://', 'http://')
+      .replace(/\/ws\/?$/, '/turn-credentials');
 
-  if (turnUrl && turnUsername && turnCredential) {
-    servers.push({
-      urls: turnUrl,
-      username: turnUsername,
-      credential: turnCredential
-    });
-    console.log('[Engine] TURN server configured');
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), 5_000);
+
+    const response = await fetch(httpUrl, { signal: controller.signal });
+    clearTimeout(timeout);
+
+    if (!response.ok) return [...DEFAULT_STUN_SERVERS];
+
+    const data = await response.json() as { iceServers?: RTCIceServer[] };
+    if (data.iceServers && data.iceServers.length > 0) {
+      logger.info('Engine', 'TURN server configured via signaling server');
+      return [...DEFAULT_STUN_SERVERS, ...data.iceServers];
+    }
+  } catch {
+    // TURN fetch failed — fall back to STUN-only
   }
-
-  return servers;
-};
+  return [...DEFAULT_STUN_SERVERS];
+}
 
 export interface TransferEngineEvents {
   onStateChange?: (state: TransferState) => void;
@@ -99,6 +112,7 @@ export class TransferEngine {
   private role: TransferRole = 'sender';
   private state: TransferState = 'idle';
   private events: TransferEngineEvents;
+  private signalingUrl: string;
   private roomCode = '';
   private peerId = '';
 
@@ -120,8 +134,17 @@ export class TransferEngine {
   // Used to ignore cleanup-related errors
   private transferLogicallyComplete = false;
 
+  // ICE candidate queue: buffer candidates until remote description is set
+  private pendingIceCandidates: RTCIceCandidateInit[] = [];
+  private remoteDescriptionSet = false;
+
+  // WebRTC connection timeout (30 seconds)
+  private connectionTimeout: ReturnType<typeof setTimeout> | null = null;
+  private static readonly CONNECTION_TIMEOUT_MS = 30_000;
+
   constructor(signalingUrl: string, events: TransferEngineEvents = {}) {
     this.events = events;
+    this.signalingUrl = signalingUrl;
     this.securityManager = new SecurityManager();
 
     this.signalingClient = new SignalingClient({
@@ -138,7 +161,7 @@ export class TransferEngine {
 
     // Handle peer joining room
     this.signalingClient.on('peer-joined', (msg) => {
-      console.log('[Engine] Peer joined:', msg.clientId);
+      logger.info('Engine', 'Peer joined', { clientId: msg.clientId });
       this.peerId = msg.clientId ?? '';
       this.events.onPeerConnected?.(this.peerId);
 
@@ -148,18 +171,19 @@ export class TransferEngine {
       }
     });
 
-    // Handle peer leaving
+    // Handle peer leaving — error during any active phase, not just transferring
     this.signalingClient.on('peer-left', () => {
-      console.log('[Engine] Peer left');
+      logger.info('Engine', 'Peer left');
       this.events.onPeerDisconnected?.();
-      if (this.state === 'transferring') {
+      const activeStates: TransferState[] = ['connecting', 'handshaking', 'ready', 'transferring'];
+      if (activeStates.includes(this.state)) {
         this.handleError(new Error('Peer disconnected during transfer'));
       }
     });
 
     // Handle room expired
     this.signalingClient.on('room-expired', () => {
-      console.log('[Engine] Room expired');
+      logger.info('Engine', 'Room expired');
       this.handleError(new Error('Room expired after 10 minutes'));
     });
 
@@ -182,6 +206,15 @@ export class TransferEngine {
     this.signalingClient.on('ice-candidate', async (msg) => {
       await this.handleIceCandidate(msg);
     });
+
+    // Handle server error messages (e.g., "Room is full", "Room ID required")
+    this.signalingClient.on('error', (msg) => {
+      const errorMessage = typeof msg.payload === 'string'
+        ? msg.payload
+        : 'Server error';
+      logger.warn('Engine', 'Server error', { error: errorMessage });
+      this.handleError(new Error(errorMessage));
+    });
   }
 
   // === Public API ===
@@ -199,9 +232,9 @@ export class TransferEngine {
     this.setState('connecting');
 
     // Compute file hash for integrity verification
-    console.log('[Engine] Computing file hash...');
+    logger.info('Engine', 'Computing file hash...');
     const hash = await computeFileHash(file);
-    console.log('[Engine] File hash:', hash.slice(0, 16) + '...');
+    logger.info('Engine', 'File hash computed');
 
     this.fileMetadata = {
       name: file.name,
@@ -217,9 +250,11 @@ export class TransferEngine {
     // Connect to signaling server
     await this.signalingClient!.connect();
     this.signalingClient!.joinRoom(this.roomCode);
+    // Disable reconnection once we've joined — reconnecting would get a new clientId
+    this.signalingClient!.allowReconnect = false;
 
     this.events.onRoomCode?.(this.roomCode);
-    console.log('[Engine] Room created:', this.roomCode);
+    logger.info('Engine', 'Room created', { roomCode: this.roomCode });
 
     return this.roomCode;
   }
@@ -236,8 +271,10 @@ export class TransferEngine {
     // Connect to signaling server
     await this.signalingClient!.connect();
     this.signalingClient!.joinRoom(this.roomCode);
+    // Disable reconnection once we've joined — reconnecting would get a new clientId
+    this.signalingClient!.allowReconnect = false;
 
-    console.log('[Engine] Joining room:', this.roomCode);
+    logger.info('Engine', 'Joining room', { roomCode: this.roomCode });
   }
 
   // Cancel/stop transfer
@@ -262,16 +299,23 @@ export class TransferEngine {
     this.setState('handshaking');
 
     const handshakeMsg = await this.securityManager.createHandshakeMessage();
-    this.signalingClient!.sendHandshakeVerify(handshakeMsg, this.peerId);
+    if (!this.signalingClient!.sendHandshakeVerify(handshakeMsg, this.peerId)) {
+      this.handleError(new Error('Failed to send handshake: signaling connection lost'));
+      return;
+    }
 
-    console.log('[Engine] Sent handshake message');
+    logger.info('Engine', 'Sent handshake message');
   }
 
   private async handleHandshakeVerify(msg: SignalingMessage): Promise<void> {
+    if (!this.validatePayload(msg, ['publicKey'])) return;
+
+    this.setState('handshaking');
+
     const payload = msg.payload as HandshakeMessage;
     this.peerId = msg.from ?? '';
 
-    console.log('[Engine] Received handshake from:', this.peerId);
+    logger.info('Engine', 'Received handshake', { peerId: this.peerId });
 
     const verified = await this.securityManager.processHandshakeMessage(payload);
 
@@ -280,12 +324,15 @@ export class TransferEngine {
       return;
     }
 
-    console.log('[Engine] Handshake verified');
+    logger.info('Engine', 'Handshake verified');
 
     // If we haven't sent our handshake yet, send it now
     if (this.role === 'receiver') {
       const handshakeMsg = await this.securityManager.createHandshakeMessage();
-      this.signalingClient!.sendHandshakeVerify(handshakeMsg, this.peerId);
+      if (!this.signalingClient!.sendHandshakeVerify(handshakeMsg, this.peerId)) {
+        this.handleError(new Error('Failed to send handshake: signaling connection lost'));
+        return;
+      }
     }
 
     // Sender creates WebRTC connection
@@ -295,11 +342,28 @@ export class TransferEngine {
     }
   }
 
+  // Validate signaling payload has required fields before unsafe cast
+  private validatePayload(msg: SignalingMessage, requiredFields: string[]): boolean {
+    if (!msg.payload || typeof msg.payload !== 'object') {
+      logger.warn('Engine', 'Missing or invalid payload', { type: msg.type });
+      return false;
+    }
+    const payload = msg.payload as Record<string, unknown>;
+    for (const field of requiredFields) {
+      if (!(field in payload)) {
+        logger.warn('Engine', 'Missing required field in payload', { type: msg.type, field });
+        return false;
+      }
+    }
+    return true;
+  }
+
   // === WebRTC Logic ===
 
   private async createPeerConnection(): Promise<void> {
+    const iceServers = await getIceServers(this.signalingUrl);
     const config: RTCConfiguration = {
-      iceServers: getIceServers(),
+      iceServers,
       iceTransportPolicy: (import.meta.env.VITE_ICE_TRANSPORT_POLICY as RTCIceTransportPolicy) || 'all'
     };
 
@@ -315,9 +379,10 @@ export class TransferEngine {
     // Handle connection state
     this.peerConnection.onconnectionstatechange = () => {
       const connState = this.peerConnection?.connectionState;
-      console.log('[Engine] Connection state:', connState);
+      logger.debug('Engine', 'Connection state', { state: connState });
 
       if (connState === 'connected') {
+        this.clearConnectionTimeout();
         this.setState('ready');
       } else if (connState === 'failed') {
         // Ignore failures after successful completion
@@ -345,6 +410,21 @@ export class TransferEngine {
         this.setupDataChannel();
       };
     }
+
+    // Start connection timeout — if WebRTC doesn't connect within 30s,
+    // STUN/TURN likely failed (symmetric NAT, firewall)
+    this.connectionTimeout = setTimeout(() => {
+      if (this.state !== 'ready' && this.state !== 'transferring' && this.state !== 'completed') {
+        this.handleError(new Error('WebRTC connection timed out - check network or firewall settings'));
+      }
+    }, TransferEngine.CONNECTION_TIMEOUT_MS);
+  }
+
+  private clearConnectionTimeout(): void {
+    if (this.connectionTimeout) {
+      clearTimeout(this.connectionTimeout);
+      this.connectionTimeout = null;
+    }
   }
 
   private setupDataChannel(): void {
@@ -353,7 +433,7 @@ export class TransferEngine {
     this.dataChannel.binaryType = 'arraybuffer';
 
     this.dataChannel.onopen = () => {
-      console.log('[Engine] Data channel open');
+      logger.info('Engine', 'Data channel open');
 
       if (this.role === 'sender') {
         // Send file metadata first
@@ -362,17 +442,17 @@ export class TransferEngine {
     };
 
     this.dataChannel.onclose = () => {
-      console.log('[Engine] Data channel closed');
+      logger.debug('Engine', 'Data channel closed');
       // Don't treat as error if transfer completed successfully
     };
 
-    this.dataChannel.onerror = (error) => {
+    this.dataChannel.onerror = () => {
       // Ignore errors after successful completion or logical completion (cleanup race condition)
       if (this.state === 'completed' || this.transferLogicallyComplete) {
-        console.log('[Engine] Data channel error after completion (ignored):', error);
+        logger.debug('Engine', 'Data channel error after completion (ignored)');
         return;
       }
-      console.error('[Engine] Data channel error:', error);
+      logger.error('Engine', 'Data channel error');
       this.handleError(new Error('Data channel error'));
     };
 
@@ -392,34 +472,76 @@ export class TransferEngine {
     const offer = await this.peerConnection.createOffer();
     await this.peerConnection.setLocalDescription(offer);
 
-    this.signalingClient!.sendOffer(offer, this.peerId);
-    console.log('[Engine] Sent offer');
+    if (!this.signalingClient!.sendOffer(offer, this.peerId)) {
+      this.handleError(new Error('Failed to send offer: signaling connection lost'));
+      return;
+    }
+    logger.info('Engine', 'Sent offer');
   }
 
   private async handleOffer(msg: SignalingMessage): Promise<void> {
+    if (!this.validatePayload(msg, ['type', 'sdp'])) return;
+
     this.peerId = msg.from ?? '';
 
     await this.createPeerConnection();
 
     const offer = msg.payload as RTCSessionDescriptionInit;
     await this.peerConnection!.setRemoteDescription(new RTCSessionDescription(offer));
+    this.remoteDescriptionSet = true;
+    this.flushPendingIceCandidates();
 
     const answer = await this.peerConnection!.createAnswer();
     await this.peerConnection!.setLocalDescription(answer);
 
-    this.signalingClient!.sendAnswer(answer, this.peerId);
-    console.log('[Engine] Sent answer');
+    if (!this.signalingClient!.sendAnswer(answer, this.peerId)) {
+      this.handleError(new Error('Failed to send answer: signaling connection lost'));
+      return;
+    }
+    logger.info('Engine', 'Sent answer');
   }
 
   private async handleAnswer(msg: SignalingMessage): Promise<void> {
+    if (!this.validatePayload(msg, ['type', 'sdp'])) return;
+
     const answer = msg.payload as RTCSessionDescriptionInit;
     await this.peerConnection!.setRemoteDescription(new RTCSessionDescription(answer));
-    console.log('[Engine] Received answer');
+    this.remoteDescriptionSet = true;
+    this.flushPendingIceCandidates();
+    logger.info('Engine', 'Received answer');
   }
 
   private async handleIceCandidate(msg: SignalingMessage): Promise<void> {
+    if (!this.validatePayload(msg, ['candidate'])) return;
+
     const candidate = msg.payload as RTCIceCandidateInit;
-    await this.peerConnection!.addIceCandidate(new RTCIceCandidate(candidate));
+
+    // Queue candidates until remote description is set — adding before
+    // setRemoteDescription silently fails or throws in most browsers
+    if (!this.remoteDescriptionSet || !this.peerConnection) {
+      this.pendingIceCandidates.push(candidate);
+      return;
+    }
+
+    try {
+      await this.peerConnection.addIceCandidate(new RTCIceCandidate(candidate));
+    } catch {
+      logger.warn('Engine', 'Failed to add ICE candidate');
+    }
+  }
+
+  private flushPendingIceCandidates(): void {
+    if (!this.peerConnection || this.pendingIceCandidates.length === 0) return;
+
+    logger.info('Engine', 'Flushing queued ICE candidates', { count: this.pendingIceCandidates.length });
+    const candidates = this.pendingIceCandidates;
+    this.pendingIceCandidates = [];
+
+    for (const candidate of candidates) {
+      this.peerConnection.addIceCandidate(new RTCIceCandidate(candidate)).catch(() => {
+        logger.warn('Engine', 'Failed to add queued ICE candidate');
+      });
+    }
   }
 
   // === File Transfer Logic ===
@@ -433,18 +555,36 @@ export class TransferEngine {
     };
 
     this.dataChannel!.send(JSON.stringify(msg));
-    console.log('[Engine] Sent metadata with hash:', this.fileMetadata.hash?.slice(0, 16) + '...');
+    logger.info('Engine', 'Sent metadata');
   }
 
   private async handleDataMessage(data: ArrayBuffer | string): Promise<void> {
-    console.log('[Engine] Received data, type:', typeof data, 'size:', typeof data === 'string' ? data.length : data.byteLength);
+    logger.debug('Engine', 'Received data', { type: typeof data, size: typeof data === 'string' ? data.length : (data as ArrayBuffer).byteLength });
 
     if (typeof data === 'string') {
       const msg: DataMessage = JSON.parse(data);
-      console.log('[Engine] Received message type:', msg.type);
+      logger.debug('Engine', 'Received message type', { type: msg.type });
 
       if (msg.type === 'metadata') {
         this.fileMetadata = msg.metadata!;
+
+        // Sanitize filename first: strip control chars, bidi overrides, path separators
+        this.fileMetadata.name = (this.fileMetadata.name || '')
+          .replace(/[\x00-\x1f\x7f-\x9f\u202a-\u202e\u2066-\u2069]/g, '')
+          .replace(/[/\\:]/g, '_')
+          .replace(/\.\./g, '_')
+          .trim();
+
+        // Validate metadata from peer after sanitization
+        if (!this.fileMetadata.name || this.fileMetadata.name.length === 0) {
+          this.handleError(new Error('Invalid file: missing name'));
+          return;
+        }
+        if (this.fileMetadata.size <= 0 || this.fileMetadata.size > MAX_FILE_SIZE) {
+          this.handleError(new Error(`File size (${formatFileSize(this.fileMetadata.size)}) exceeds maximum allowed size of ${MAX_FILE_SIZE_DISPLAY}`));
+          return;
+        }
+
         this.events.onFileMetadata?.(this.fileMetadata);
 
         // Setup file download stream
@@ -464,7 +604,7 @@ export class TransferEngine {
         // Handle receipt from receiver
         this.transferLogicallyComplete = true;
         if (msg.status === 'verified') {
-          console.log('[Engine] Receipt confirmed - transfer verified');
+          logger.info('Engine', 'Receipt confirmed - transfer verified');
           this.setState('completed');
         } else {
           this.handleError(new Error('Receiver reported hash verification failed'));
@@ -507,16 +647,9 @@ export class TransferEngine {
       // Encrypt chunk
       const encrypted = await this.securityManager.encryptChunk(buffer);
 
-      // Wait for buffer to drain if needed (backpressure)
-      const backpressureStart = Date.now();
-      while (this.dataChannel.bufferedAmount > BUFFER_THRESHOLD) {
-        if (this.dataChannel.readyState !== 'open') {
-          throw new Error('Data channel closed during transfer');
-        }
-        if (Date.now() - backpressureStart > 30_000) {
-          throw new Error('Transfer stalled - backpressure timeout');
-        }
-        await new Promise((resolve) => setTimeout(resolve, 10));
+      // Wait for buffer to drain if needed (event-driven backpressure)
+      if (this.dataChannel.bufferedAmount > BUFFER_THRESHOLD) {
+        await this.waitForBufferDrain(this.dataChannel);
       }
 
       this.dataChannel.send(encrypted);
@@ -526,23 +659,46 @@ export class TransferEngine {
 
     // Send done message
     this.dataChannel.send(JSON.stringify({ type: 'done' }));
-    console.log('[Engine] Sent all chunks, waiting for receipt...');
+    logger.info('Engine', 'Sent all chunks, waiting for receipt');
 
     // Note: State will be set to 'completed' when receipt is received
   }
 
+  // Event-driven backpressure: wait for bufferedAmount to drop below threshold
+  // instead of polling with setTimeout. Uses onbufferedamountlow event.
+  private waitForBufferDrain(channel: RTCDataChannel): Promise<void> {
+    return new Promise((resolve, reject) => {
+      if (channel.readyState !== 'open') {
+        reject(new Error('Data channel closed during transfer'));
+        return;
+      }
+
+      channel.bufferedAmountLowThreshold = BUFFER_THRESHOLD;
+      const timeout = setTimeout(() => {
+        channel.onbufferedamountlow = null;
+        reject(new Error('Transfer stalled - backpressure timeout'));
+      }, 30_000);
+
+      channel.onbufferedamountlow = () => {
+        clearTimeout(timeout);
+        channel.onbufferedamountlow = null;
+        resolve();
+      };
+    });
+  }
+
   private async handleChunk(data: ArrayBuffer): Promise<void> {
     if (!this.writer) {
-      console.warn('[Engine] No writer available for chunk');
+      logger.warn('Engine', 'No writer available for chunk');
       return;
     }
 
     try {
       // Decrypt chunk
-      console.log('[Engine] Decrypting chunk, size:', data.byteLength);
+      logger.debug('Engine', 'Decrypting chunk', { size: data.byteLength });
       const decrypted = await this.securityManager.decryptChunk(data);
       const chunk = new Uint8Array(decrypted);
-      console.log('[Engine] Chunk decrypted, size:', chunk.length);
+      logger.debug('Engine', 'Chunk decrypted', { size: chunk.length });
 
       // Feed streaming hasher for incremental hash verification (constant memory)
       this.streamingHasher?.update(chunk);
@@ -553,7 +709,7 @@ export class TransferEngine {
       this.bytesTransferred += decrypted.byteLength;
       this.updateProgress();
     } catch (error) {
-      console.error('[Engine] Chunk handling error:', error);
+      logger.error('Engine', 'Chunk handling error');
       this.handleError(new Error('Decryption failed - possible tampering'));
     }
   }
@@ -570,15 +726,15 @@ export class TransferEngine {
     // Verify hash using streaming hasher (works for all file sizes including 0-byte)
     let verified = true;
     if (this.fileMetadata?.hash && this.streamingHasher) {
-      console.log('[Engine] Verifying file hash...');
+      logger.info('Engine', 'Verifying file hash');
 
       const actualHash = this.streamingHasher.digest();
       verified = actualHash === this.fileMetadata.hash;
 
       if (verified) {
-        console.log('[Engine] File hash verified successfully');
+        logger.info('Engine', 'File hash verified successfully');
       } else {
-        console.error('[Engine] Hash mismatch! Expected:', this.fileMetadata.hash.slice(0, 16), 'Got:', actualHash.slice(0, 16));
+        logger.error('Engine', 'Hash mismatch detected');
       }
 
       this.events.onHashVerified?.(verified);
@@ -596,7 +752,7 @@ export class TransferEngine {
 
     if (verified) {
       this.setState('completed');
-      console.log('[Engine] Transfer complete - verified');
+      logger.info('Engine', 'Transfer complete - verified');
     } else {
       this.handleError(new Error('File integrity check failed - hash mismatch'));
     }
@@ -647,32 +803,44 @@ export class TransferEngine {
   private setState(state: TransferState): void {
     this.state = state;
     this.events.onStateChange?.(state);
-    console.log('[Engine] State:', state);
+    logger.debug('Engine', 'State transition', { state });
   }
 
   private handleError(error: Error): void {
     // Don't override completed state with error, or if transfer is logically complete
     if (this.state === 'completed' || this.transferLogicallyComplete) {
-      console.log('[Engine] Error after completion (ignored):', error.message);
+      logger.debug('Engine', 'Error after completion (ignored)', { error: error.message });
       return;
     }
-    console.error('[Engine] Error:', error.message);
+    logger.error('Engine', 'Error', { error: error.message });
     this.setState('error');
     this.events.onError?.(error);
     this.cleanup();
   }
 
   private handleSignalingClose(): void {
-    if (this.state === 'transferring') {
-      // Signaling can close during transfer, that's okay
+    if (this.state === 'transferring' || this.state === 'completed') {
+      // Signaling can close during active transfer or after completion — data flows via WebRTC
       return;
     }
-    if (this.state !== 'completed' && this.state !== 'idle') {
+    if (this.state === 'connecting' || this.state === 'handshaking') {
+      // During setup, losing signaling is fatal — we can't complete negotiation
+      this.handleError(new Error('Server connection lost during setup'));
+      return;
+    }
+    if (this.state === 'ready') {
+      // WebRTC is connected but signaling lost — late ICE candidates won't arrive
+      logger.warn('Engine', 'Signaling lost in ready state - late ICE candidates cannot arrive');
+      return;
+    }
+    if (this.state !== 'idle') {
       this.events.onPeerDisconnected?.();
     }
   }
 
   private cleanup(): void {
+    this.clearConnectionTimeout();
+
     this.dataChannel?.close();
     this.dataChannel = null;
 
@@ -695,6 +863,8 @@ export class TransferEngine {
     this.speedHistory = [];
     this.speedSum = 0;
     this.streamingHasher = null;
+    this.pendingIceCandidates = [];
+    this.remoteDescriptionSet = false;
   }
 
   // Cleanup on destroy

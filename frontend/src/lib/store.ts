@@ -1,6 +1,7 @@
 import { create } from 'zustand';
 import { TransferEngine, TransferProgress, TransferState, FileMetadata, TransferRole } from './TransferEngine';
 import { type ConnectionPhase, type AppError, mapErrorToAppError } from '../types';
+import { logger } from './logger';
 
 // Session persistence for room code recovery
 const STORAGE_KEY = 'warp-lan-session' as const;
@@ -20,7 +21,7 @@ function saveSession(roomCode: string, role: TransferRole | null): void {
       role,
       timestamp: Date.now()
     };
-    localStorage.setItem(STORAGE_KEY, JSON.stringify(session));
+    sessionStorage.setItem(STORAGE_KEY, JSON.stringify(session));
   } catch {
     // localStorage not available
   }
@@ -28,14 +29,14 @@ function saveSession(roomCode: string, role: TransferRole | null): void {
 
 function loadSession(): PersistedSession | null {
   try {
-    const data = localStorage.getItem(STORAGE_KEY);
+    const data = sessionStorage.getItem(STORAGE_KEY);
     if (!data) return null;
 
     const session: PersistedSession = JSON.parse(data);
 
     // Session expires after 10 minutes
     if (Date.now() - session.timestamp > SESSION_EXPIRY_MS) {
-      localStorage.removeItem(STORAGE_KEY);
+      sessionStorage.removeItem(STORAGE_KEY);
       return null;
     }
 
@@ -47,7 +48,7 @@ function loadSession(): PersistedSession | null {
 
 function clearSession(): void {
   try {
-    localStorage.removeItem(STORAGE_KEY);
+    sessionStorage.removeItem(STORAGE_KEY);
   } catch {
     // localStorage not available
   }
@@ -92,7 +93,7 @@ function getSignalingUrl(): string {
       !window.location.hostname.includes('127.0.0.1');
 
     if (isProduction) {
-      console.error('[Store] VITE_SIGNALING_URL not configured! Set this environment variable in your deployment platform.');
+      logger.error('Store', 'VITE_SIGNALING_URL not configured! Set this environment variable in your deployment platform.');
     }
     return 'ws://localhost:8080/ws';
   }

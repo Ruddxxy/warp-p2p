@@ -16,10 +16,10 @@ Secure, end-to-end encrypted peer-to-peer file transfer. No servers, no limits, 
 - **Streaming Download** - Uses StreamSaver for memory-efficient large file downloads
 - **Chunked Transfer** - 64KB chunks with backpressure handling
 - **Progress Tracking** - Real-time speed, percentage, and ETA
-- **Speed Graph** - Visual transfer speed history
+
 
 ### User Experience
-- **Simple Room Codes** - 4-digit codes (XX-XX format) for easy sharing
+- **Simple Room Codes** - 6-digit codes (XXX-XXX format) for easy sharing
 - **Drag & Drop** - Drop files directly onto the page
 - **Copy to Clipboard** - One-click code copying with haptic feedback
 - **Session Recovery** - Resume sessions after page refresh (10 min expiry)
@@ -67,10 +67,8 @@ Environment variables (set in `.env` or environment):
 | Variable | Description | Default |
 |----------|-------------|---------|
 | `VITE_SIGNALING_URL` | WebSocket signaling server URL | `ws://localhost:8080/ws` |
-| `VITE_TURN_URL` | TURN server URL for NAT traversal | - |
-| `VITE_TURN_USERNAME` | TURN server username | - |
-| `VITE_TURN_CREDENTIAL` | TURN server credential | - |
 | `VITE_ICE_TRANSPORT_POLICY` | ICE policy (`all` or `relay`) | `all` |
+| `VITE_LOG_LEVEL` | Log level: `debug`, `info`, `warn`, `error` | `info` |
 
 ## Architecture
 
@@ -116,7 +114,7 @@ Environment variables (set in `.env` or environment):
 7. Waits for receiver's integrity verification
 
 ### Receiver Flow
-1. Enter 4-digit room code
+1. Enter 6-digit room code
 2. PAKE handshake verifies code matches sender
 3. Receive file metadata (name, size, hash)
 4. Download begins via StreamSaver

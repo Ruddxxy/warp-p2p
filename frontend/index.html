@@ -4,13 +4,187 @@
     <meta charset="UTF-8" />
     <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <meta name="description" content="Warp-LAN: Secure P2P file transfer with end-to-end encryption" />
-    <meta name="theme-color" content="#000000" />
+
+    <!-- Primary Meta Tags -->
+    <title>Warp — Instant Encrypted File Transfer</title>
+    <meta name="title" content="Warp — Instant Encrypted File Transfer" />
+    <meta name="description" content="Send files directly to another device. Peer-to-peer, end-to-end encrypted, no signup required. Up to 25 GB." />
+    <meta name="keywords" content="file transfer, P2P, peer to peer, encrypted, secure, send files, no signup, WebRTC, airdrop alternative" />
+    <meta name="author" content="Warp" />
+    <meta name="robots" content="index, follow" />
+    <meta name="theme-color" content="#0A0A0F" />
+    <link rel="canonical" href="https://warp-lan.vercel.app/" />
+
+    <!-- Open Graph / Facebook / LinkedIn / Slack -->
+    <meta property="og:type" content="website" />
+    <meta property="og:url" content="https://warp-lan.vercel.app/" />
+    <meta property="og:title" content="Warp — Instant Encrypted File Transfer" />
+    <meta property="og:description" content="Send files directly to another device. Peer-to-peer, end-to-end encrypted, no signup. Up to 25 GB." />
+    <meta property="og:image" content="https://warp-lan.vercel.app/og-image.png" />
+    <meta property="og:image:width" content="1200" />
+    <meta property="og:image:height" content="630" />
+    <meta property="og:site_name" content="Warp" />
+
+    <!-- Twitter -->
+    <meta name="twitter:card" content="summary_large_image" />
+    <meta name="twitter:title" content="Warp — Instant Encrypted File Transfer" />
+    <meta name="twitter:description" content="Send files directly to another device. P2P encrypted, no signup. Up to 25 GB." />
+    <meta name="twitter:image" content="https://warp-lan.vercel.app/og-image.png" />
+
+    <!-- Fonts -->
     <link rel="preconnect" href="https://fonts.googleapis.com" />
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
-    <title>Warp-LAN | Secure P2P Transfer</title>
+
+    <!-- JSON-LD: WebApplication -->
+    <script type="application/ld+json">
+    {
+      "@context": "https://schema.org",
+      "@type": "WebApplication",
+      "name": "Warp",
+      "url": "https://warp-lan.vercel.app/",
+      "description": "Instant encrypted peer-to-peer file transfer in your browser",
+      "applicationCategory": "UtilityApplication",
+      "operatingSystem": "Any",
+      "offers": { "@type": "Offer", "price": "0", "priceCurrency": "USD" },
+      "featureList": ["End-to-end encryption", "Peer-to-peer transfer", "No signup required", "Up to 25GB files"]
+    }
+    </script>
+
+    <!-- JSON-LD: FAQPage (AEO) -->
+    <script type="application/ld+json">
+    {
+      "@context": "https://schema.org",
+      "@type": "FAQPage",
+      "mainEntity": [
+        {
+          "@type": "Question",
+          "name": "What is Warp?",
+          "acceptedAnswer": {
+            "@type": "Answer",
+            "text": "Warp is a free web app for transferring files directly between two devices using peer-to-peer encryption. No account or installation needed. Files up to 25 GB."
+          }
+        },
+        {
+          "@type": "Question",
+          "name": "Is my data encrypted?",
+          "acceptedAnswer": {
+            "@type": "Answer",
+            "text": "Yes. All transfers use AES-256-GCM end-to-end encryption. The encryption key is derived via PAKE handshake — the server never sees your data or keys."
+          }
+        },
+        {
+          "@type": "Question",
+          "name": "What is the maximum file size?",
+          "acceptedAnswer": {
+            "@type": "Answer",
+            "text": "You can transfer files up to 25 GB per session. Files are streamed directly between devices, so no upload to a server is needed."
+          }
+        },
+        {
+          "@type": "Question",
+          "name": "Do I need to create an account?",
+          "acceptedAnswer": {
+            "@type": "Answer",
+            "text": "No. Warp requires no signup, login, or personal information. Just open the app and start transferring."
+          }
+        },
+        {
+          "@type": "Question",
+          "name": "Does the server store my files?",
+          "acceptedAnswer": {
+            "@type": "Answer",
+            "text": "No. Files transfer directly between devices via WebRTC. The signaling server only relays room codes and connection metadata — never file content."
+          }
+        },
+        {
+          "@type": "Question",
+          "name": "How is Warp different from WeTransfer or AirDrop?",
+          "acceptedAnswer": {
+            "@type": "Answer",
+            "text": "Unlike WeTransfer, files never touch a server — they go directly between devices. Unlike AirDrop, Warp works on any platform and any browser, not just Apple devices."
+          }
+        }
+      ]
+    }
+    </script>
+
+    <!-- JSON-LD: HowTo (AEO) -->
+    <script type="application/ld+json">
+    {
+      "@context": "https://schema.org",
+      "@type": "HowTo",
+      "name": "How to Transfer Files with Warp",
+      "description": "Send files securely between devices using Warp's peer-to-peer encrypted transfer.",
+      "step": [
+        {
+          "@type": "HowToStep",
+          "position": 1,
+          "name": "Select a file",
+          "text": "Open Warp in your browser and drop a file or click to select one. Files up to 25 GB are supported."
+        },
+        {
+          "@type": "HowToStep",
+          "position": 2,
+          "name": "Share the code",
+          "text": "A 6-digit room code appears. Share this code with the person receiving the file."
+        },
+        {
+          "@type": "HowToStep",
+          "position": 3,
+          "name": "Enter the code",
+          "text": "The receiver opens Warp, clicks 'I have a code', and enters the 6-digit code."
+        },
+        {
+          "@type": "HowToStep",
+          "position": 4,
+          "name": "Transfer starts automatically",
+          "text": "Once connected, the file transfers directly between devices with AES-256-GCM encryption. A progress bar shows the status."
+        }
+      ]
+    }
+    </script>
   </head>
   <body>
+    <!-- Semantic content for AI crawlers and noscript users -->
+    <noscript>
+      <main>
+        <h1>Warp — Instant Encrypted File Transfer</h1>
+        <p>Send files directly to another device. Peer-to-peer, end-to-end encrypted, no signup required. Up to 25 GB.</p>
+
+        <h2>How It Works</h2>
+        <ol>
+          <li>Select a file (up to 25 GB)</li>
+          <li>Share the 6-digit room code with the receiver</li>
+          <li>The receiver enters the code</li>
+          <li>File transfers directly with AES-256-GCM encryption</li>
+        </ol>
+
+        <h2>Security</h2>
+        <ul>
+          <li>AES-256-GCM end-to-end encryption</li>
+          <li>PAKE handshake prevents man-in-the-middle attacks</li>
+          <li>SHA-256 integrity verification</li>
+          <li>No file data stored on any server</li>
+          <li>Direct peer-to-peer via WebRTC</li>
+        </ul>
+
+        <h2>FAQ</h2>
+        <dl>
+          <dt>Is my data encrypted?</dt>
+          <dd>Yes. AES-256-GCM end-to-end encryption. The server never sees your files or keys.</dd>
+          <dt>What is the file size limit?</dt>
+          <dd>25 GB per transfer session.</dd>
+          <dt>Do I need an account?</dt>
+          <dd>No. No signup, no login, no personal information required.</dd>
+          <dt>Does the server store my files?</dt>
+          <dd>No. Files go directly between devices via WebRTC.</dd>
+          <dt>What browsers work?</dt>
+          <dd>Chrome, Firefox, Safari, Edge — any modern browser with WebRTC support.</dd>
+          <dt>How is this different from WeTransfer?</dt>
+          <dd>Files never touch a server. Direct peer-to-peer, fully encrypted, no account needed.</dd>
+        </dl>
+      </main>
+    </noscript>
     <div id="root"></div>
     <script type="module" src="/src/main.tsx"></script>
   </body>

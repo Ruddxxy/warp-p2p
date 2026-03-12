@@ -7,22 +7,24 @@ import { useTransferStore } from '../store';
 
 // Mock TransferEngine
 vi.mock('../TransferEngine', () => ({
-  TransferEngine: vi.fn().mockImplementation((_url, events) => ({
-    createRoom: vi.fn().mockImplementation(async () => {
-      events.onRoomCode?.('42-69');
-      return '42-69';
-    }),
-    joinRoom: vi.fn().mockResolvedValue(undefined),
-    destroy: vi.fn(),
-    getState: vi.fn().mockReturnValue('idle'),
-    getRole: vi.fn().mockReturnValue('sender')
-  }))
+  TransferEngine: vi.fn().mockImplementation(function(_url: string, events: Record<string, Function>) {
+    return {
+      createRoom: vi.fn().mockImplementation(async () => {
+        events.onRoomCode?.('42-69');
+        return '42-69';
+      }),
+      joinRoom: vi.fn().mockResolvedValue(undefined),
+      destroy: vi.fn(),
+      getState: vi.fn().mockReturnValue('idle'),
+      getRole: vi.fn().mockReturnValue('sender')
+    };
+  })
 }));
 
 describe('useTransferStore', () => {
   beforeEach(() => {
     useTransferStore.getState().reset();
-    localStorage.clear();
+    sessionStorage.clear();
   });
 
   afterEach(() => {
@@ -91,23 +93,25 @@ describe('useTransferStore', () => {
       expect(useTransferStore.getState().engine).not.toBeNull();
     });
 
-    it('saves session to localStorage', async () => {
+    it('saves session to sessionStorage', async () => {
       const file = new File(['test'], 'test.txt');
       const { createRoom } = useTransferStore.getState();
 
       await createRoom(file);
 
-      const stored = JSON.parse(localStorage.getItem('warp-lan-session') ?? '{}');
+      const stored = JSON.parse(sessionStorage.getItem('warp-lan-session') ?? '{}');
       expect(stored.roomCode).toBe('42-69');
       expect(stored.role).toBe('sender');
     });
 
     it('handles errors and sets error state', async () => {
       const { TransferEngine } = await import('../TransferEngine');
-      (TransferEngine as ReturnType<typeof vi.fn>).mockImplementationOnce((_url, _events) => ({
-        createRoom: vi.fn().mockRejectedValue(new Error('Test error')),
-        destroy: vi.fn()
-      }));
+      (TransferEngine as unknown as ReturnType<typeof vi.fn>).mockImplementationOnce(function(_url: string, _events: Record<string, Function>) {
+        return {
+          createRoom: vi.fn().mockRejectedValue(new Error('Test error')),
+          destroy: vi.fn()
+        };
+      });
 
       const { initEngine, createRoom } = useTransferStore.getState();
       initEngine('ws://test:8080/ws');
@@ -133,12 +137,12 @@ describe('useTransferStore', () => {
       expect(state.roomCode).toBe('12-34');
     });
 
-    it('saves session to localStorage', async () => {
+    it('saves session to sessionStorage', async () => {
       const { joinRoom } = useTransferStore.getState();
 
       await joinRoom('12-34');
 
-      const stored = JSON.parse(localStorage.getItem('warp-lan-session') ?? '{}');
+      const stored = JSON.parse(sessionStorage.getItem('warp-lan-session') ?? '{}');
       expect(stored.roomCode).toBe('12-34');
       expect(stored.role).toBe('receiver');
     });
@@ -161,27 +165,27 @@ describe('useTransferStore', () => {
       expect(state.file).toBeNull();
     });
 
-    it('clears localStorage session', async () => {
+    it('clears sessionStorage session', async () => {
       const file = new File(['test'], 'test.txt');
       const { createRoom, reset } = useTransferStore.getState();
 
       await createRoom(file);
-      expect(localStorage.getItem('warp-lan-session')).not.toBeNull();
+      expect(sessionStorage.getItem('warp-lan-session')).not.toBeNull();
 
       reset();
 
-      expect(localStorage.getItem('warp-lan-session')).toBeNull();
+      expect(sessionStorage.getItem('warp-lan-session')).toBeNull();
     });
   });
 
   describe('restoreSession', () => {
-    it('restores session from localStorage', () => {
+    it('restores session from sessionStorage', () => {
       const session = {
         roomCode: '99-88',
         role: 'sender',
         timestamp: Date.now()
       };
-      localStorage.setItem('warp-lan-session', JSON.stringify(session));
+      sessionStorage.setItem('warp-lan-session', JSON.stringify(session));
 
       const { restoreSession } = useTransferStore.getState();
       const restored = restoreSession();
@@ -197,7 +201,7 @@ describe('useTransferStore', () => {
         role: 'sender',
         timestamp: Date.now() - 15 * 60 * 1000 // 15 minutes ago
       };
-      localStorage.setItem('warp-lan-session', JSON.stringify(session));
+      sessionStorage.setItem('warp-lan-session', JSON.stringify(session));
 
       const { restoreSession } = useTransferStore.getState();
       const restored = restoreSession();
@@ -218,7 +222,7 @@ describe('useTransferStore', () => {
       const { TransferEngine } = await import('../TransferEngine');
       let capturedEvents: Record<string, unknown> = {};
 
-      (TransferEngine as ReturnType<typeof vi.fn>).mockImplementationOnce((_url, events) => {
+      (TransferEngine as unknown as ReturnType<typeof vi.fn>).mockImplementationOnce(function(_url: string, events: Record<string, Function>) {
         capturedEvents = events;
         return {
           createRoom: vi.fn().mockResolvedValue('42-69'),
@@ -238,7 +242,7 @@ describe('useTransferStore', () => {
       const { TransferEngine } = await import('../TransferEngine');
       let capturedEvents: Record<string, unknown> = {};
 
-      (TransferEngine as ReturnType<typeof vi.fn>).mockImplementationOnce((_url, events) => {
+      (TransferEngine as unknown as ReturnType<typeof vi.fn>).mockImplementationOnce(function(_url: string, events: Record<string, Function>) {
         capturedEvents = events;
         return {
           createRoom: vi.fn().mockResolvedValue('42-69'),
@@ -259,7 +263,7 @@ describe('useTransferStore', () => {
       const { TransferEngine } = await import('../TransferEngine');
       let capturedEvents: Record<string, unknown> = {};
 
-      (TransferEngine as ReturnType<typeof vi.fn>).mockImplementationOnce((_url, events) => {
+      (TransferEngine as unknown as ReturnType<typeof vi.fn>).mockImplementationOnce(function(_url: string, events: Record<string, Function>) {
         capturedEvents = events;
         return {
           createRoom: vi.fn().mockResolvedValue('42-69'),
@@ -279,7 +283,7 @@ describe('useTransferStore', () => {
       const { TransferEngine } = await import('../TransferEngine');
       let capturedEvents: Record<string, unknown> = {};
 
-      (TransferEngine as ReturnType<typeof vi.fn>).mockImplementationOnce((_url, events) => {
+      (TransferEngine as unknown as ReturnType<typeof vi.fn>).mockImplementationOnce(function(_url: string, events: Record<string, Function>) {
         capturedEvents = events;
         return {
           createRoom: vi.fn().mockResolvedValue('42-69'),

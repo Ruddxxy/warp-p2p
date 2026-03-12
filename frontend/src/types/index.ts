@@ -113,7 +113,7 @@ const errorMappings: ErrorMapping[] = [
     error: {
       code: 'WRONG_CODE',
       message: 'Invalid transfer code',
-      suggestion: 'Double-check the 4-digit code and try again.',
+      suggestion: 'Double-check the 6-digit code and try again.',
       recoverable: true,
     },
   },
@@ -186,6 +186,87 @@ const errorMappings: ErrorMapping[] = [
       code: 'SIGNALING_ERROR',
       message: 'Server connection lost',
       suggestion: 'Check your internet connection and try again.',
+      recoverable: true,
+    },
+  },
+  {
+    match: 'Room is full',
+    error: {
+      code: 'ROOM_FULL',
+      message: 'Room is full',
+      suggestion: 'This room already has two peers connected. Check your code and try again.',
+      recoverable: true,
+    },
+  },
+  {
+    match: 'Room ID required',
+    error: {
+      code: 'INVALID_REQUEST',
+      message: 'Invalid request',
+      suggestion: 'Something went wrong. Please try again.',
+      recoverable: true,
+    },
+  },
+  {
+    match: 'Must join a room',
+    error: {
+      code: 'INVALID_REQUEST',
+      message: 'Connection error',
+      suggestion: 'Messages were sent before joining a room. Please try again.',
+      recoverable: true,
+    },
+  },
+  {
+    match: 'Failed to join room',
+    error: {
+      code: 'JOIN_FAILED',
+      message: 'Could not join room',
+      suggestion: 'Server connection was lost. Check your internet and try again.',
+      recoverable: true,
+    },
+  },
+  {
+    match: 'Failed to send offer',
+    error: {
+      code: 'SIGNALING_LOST_SETUP',
+      message: 'Lost connection to server',
+      suggestion: 'The signaling server disconnected during setup. Check your internet and try again.',
+      recoverable: true,
+    },
+  },
+  {
+    match: 'Failed to send answer',
+    error: {
+      code: 'SIGNALING_LOST_SETUP',
+      message: 'Lost connection to server',
+      suggestion: 'The signaling server disconnected during setup. Check your internet and try again.',
+      recoverable: true,
+    },
+  },
+  {
+    match: 'Failed to send handshake',
+    error: {
+      code: 'SIGNALING_LOST_SETUP',
+      message: 'Lost connection to server',
+      suggestion: 'The signaling server disconnected during setup. Check your internet and try again.',
+      recoverable: true,
+    },
+  },
+  {
+    match: 'WebRTC connection timed out',
+    error: {
+      code: 'WEBRTC_TIMEOUT',
+      message: 'Connection timed out',
+      suggestion: 'Could not establish a direct connection. A firewall or strict network may be blocking WebRTC. Try a different network.',
+      recoverable: true,
+    },
+  },
+  {
+    match: 'Server connection lost during setup',
+    error: {
+      code: 'SIGNALING_LOST_SETUP',
+      message: 'Lost connection to server',
+      suggestion: 'The signaling server disconnected during setup. Check your internet and try again.',
       recoverable: true,
     },
   },

@@ -243,11 +243,17 @@ func TestHub_DirectMessage(t *testing.T) {
 	<-client1.Send
 	<-client2.Send
 
+	// Both clients must be in the same room for direct messages
+	hub.JoinRoom(client1, "room-dm")
+	hub.JoinRoom(client2, "room-dm")
+	<-client1.Send // drain peer-joined
+
 	// Direct message to client2
 	hub.broadcast <- &SignalingMessage{
-		Type: MsgTypeAnswer,
-		From: client1.ID,
-		To:   client2.ID,
+		Type:   MsgTypeAnswer,
+		From:   client1.ID,
+		To:     client2.ID,
+		RoomID: "room-dm",
 	}
 
 	select {
@@ -259,6 +265,42 @@ func TestHub_DirectMessage(t *testing.T) {
 		}
 	case <-time.After(100 * time.Millisecond):
 		t.Error("Direct message not received")
+	}
+}
+
+func TestHub_CrossRoomDirectMessageBlocked(t *testing.T) {
+	hub := NewHub()
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	go hub.Run(ctx)
+
+	client1 := &Client{ID: "client-1", Hub: hub, Send: make(chan []byte, 256)}
+	client2 := &Client{ID: "client-2", Hub: hub, Send: make(chan []byte, 256)}
+
+	hub.register <- client1
+	hub.register <- client2
+	time.Sleep(10 * time.Millisecond)
+	<-client1.Send
+	<-client2.Send
+
+	// Put clients in different rooms
+	hub.JoinRoom(client1, "room-A")
+	hub.JoinRoom(client2, "room-B")
+
+	// Attempt cross-room direct message (should be blocked)
+	hub.broadcast <- &SignalingMessage{
+		Type:   MsgTypeAnswer,
+		From:   client1.ID,
+		To:     client2.ID,
+		RoomID: "room-A",
+	}
+
+	select {
+	case <-client2.Send:
+		t.Error("Cross-room direct message should have been blocked")
+	case <-time.After(50 * time.Millisecond):
+		// Expected: message was blocked
 	}
 }
 
@@ -348,12 +390,109 @@ func TestHub_GracefulShutdown(t *testing.T) {
 	cancel()
 	wg.Wait()
 
-	// Send channel should be closed
-	_, ok := <-client.Send
-	if ok {
-		// Channel might have buffered messages, drain them
-		for range client.Send {
+	// Send channel should be closed — reading should not block
+	select {
+	case _, ok := <-client.Send:
+		if ok {
+			t.Log("Drained a buffered message from closed channel")
 		}
+	default:
+		// Channel already empty and closed
+	}
+}
+
+func TestHub_DoubleClosePanic(t *testing.T) {
+	// Verifies that unregistering a client during shutdown does not panic
+	hub := NewHub()
+	ctx, cancel := context.WithCancel(context.Background())
+
+	var wg sync.WaitGroup
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		hub.Run(ctx)
+	}()
+
+	client := &Client{ID: "test-client", Hub: hub, Send: make(chan []byte, 256)}
+	hub.register <- client
+	time.Sleep(10 * time.Millisecond)
+
+	// Unregister first, then cancel — both try to close Send channel
+	hub.unregister <- client
+	time.Sleep(10 * time.Millisecond)
+	cancel()
+	wg.Wait()
+	// If we get here without panic, the test passes
+}
+
+func TestHub_RoomCapacityLimit(t *testing.T) {
+	hub := NewHub()
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	go hub.Run(ctx)
+
+	client1 := &Client{ID: "client-1", Hub: hub, Send: make(chan []byte, 256)}
+	client2 := &Client{ID: "client-2", Hub: hub, Send: make(chan []byte, 256)}
+	client3 := &Client{ID: "client-3", Hub: hub, Send: make(chan []byte, 256)}
+
+	hub.register <- client1
+	hub.register <- client2
+	hub.register <- client3
+	time.Sleep(10 * time.Millisecond)
+	<-client1.Send // drain connected
+	<-client2.Send // drain connected
+	<-client3.Send // drain connected
+
+	// First two clients join the room successfully
+	hub.JoinRoom(client1, "full-room")
+	hub.JoinRoom(client2, "full-room")
+	<-client1.Send // drain peer-joined notification for client2
+
+	// Third client attempts to join the full room
+	hub.JoinRoom(client3, "full-room")
+
+	// Client3 should receive an error message indicating the room is full
+	select {
+	case msg := <-client3.Send:
+		var sm SignalingMessage
+		if err := json.Unmarshal(msg, &sm); err != nil {
+			t.Fatalf("Failed to unmarshal: %v", err)
+		}
+		if sm.Type != MsgTypeError {
+			t.Errorf("Expected error message type, got %v", sm.Type)
+		}
+		var payload string
+		if err := json.Unmarshal(sm.Payload, &payload); err != nil {
+			t.Fatalf("Failed to unmarshal payload: %v", err)
+		}
+		if payload != "Room is full" {
+			t.Errorf("Expected 'Room is full' error, got %q", payload)
+		}
+	case <-time.After(100 * time.Millisecond):
+		t.Error("Client3 should have received an error message")
+	}
+
+	// Verify client3 was NOT added to the room
+	hub.mu.RLock()
+	room := hub.rooms["full-room"]
+	hub.mu.RUnlock()
+
+	room.mu.RLock()
+	clientCount := len(room.Clients)
+	_, client3InRoom := room.Clients[client3.ID]
+	room.mu.RUnlock()
+
+	if clientCount != 2 {
+		t.Errorf("Room should have 2 clients, got %d", clientCount)
+	}
+	if client3InRoom {
+		t.Error("Client3 should not be in the room")
+	}
+
+	// Verify client3's RoomID was NOT updated to the full room
+	if client3.RoomID == "full-room" {
+		t.Error("Client3 RoomID should not be set to the full room")
 	}
 }
 
@@ -415,14 +554,14 @@ func TestWebSocket_JoinRoom(t *testing.T) {
 	// Join room
 	joinMsg := SignalingMessage{
 		Type:   MsgTypeHandshakeInit,
-		RoomID: "test-room",
+		RoomID: "123-456",
 	}
 	ws.WriteJSON(joinMsg)
 
 	time.Sleep(50 * time.Millisecond)
 
 	hub.mu.RLock()
-	_, exists := hub.rooms["test-room"]
+	_, exists := hub.rooms["123-456"]
 	hub.mu.RUnlock()
 
 	if !exists {

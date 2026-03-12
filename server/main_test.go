@@ -1,9 +1,14 @@
 package main
 
 import (
+	"crypto/hmac"
+	"crypto/sha1"
+	"encoding/base64"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"strconv"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -123,7 +128,7 @@ func TestGetClientIP(t *testing.T) {
 			name:     "X-Forwarded-For multiple",
 			headers:  map[string]string{"X-Forwarded-For": "203.0.113.1, 70.41.3.18"},
 			remote:   "127.0.0.1:8080",
-			expected: "203.0.113.1",
+			expected: "70.41.3.18",
 		},
 		{
 			name:     "X-Real-IP",
@@ -239,4 +244,111 @@ func TestServerMetrics(t *testing.T) {
 	if result["active_rooms"].(int) != 0 {
 		t.Errorf("Expected 0 active rooms, got %v", result["active_rooms"])
 	}
+}
+
+func TestTurnCredentialsEndpoint(t *testing.T) {
+	rl := NewRateLimiter(100, time.Minute)
+	defer rl.Stop()
+
+	handler := NewTurnHandler(rl)
+
+	t.Run("returns empty iceServers when env vars are not set", func(t *testing.T) {
+		// t.Setenv ensures TURN_URL and TURN_SECRET are unset for this subtest
+		// and restores original values when the subtest completes
+		t.Setenv("TURN_URL", "")
+		t.Setenv("TURN_SECRET", "")
+
+		req := httptest.NewRequest("GET", "/turn-credentials", nil)
+		rec := httptest.NewRecorder()
+
+		handler.ServeHTTP(rec, req)
+
+		if rec.Code != http.StatusOK {
+			t.Errorf("Expected status 200, got %d", rec.Code)
+		}
+
+		body := strings.TrimSpace(rec.Body.String())
+		expected := `{"iceServers":[]}`
+		if body != expected {
+			t.Errorf("Expected %s, got %s", expected, body)
+		}
+	})
+
+	t.Run("returns valid HMAC-SHA1 credentials when env vars are set", func(t *testing.T) {
+		turnURL := "turn:my-turn-server.example.com:3478"
+		turnSecret := "test-shared-secret"
+
+		t.Setenv("TURN_URL", turnURL)
+		t.Setenv("TURN_SECRET", turnSecret)
+
+		req := httptest.NewRequest("GET", "/turn-credentials", nil)
+		rec := httptest.NewRecorder()
+
+		beforeRequest := time.Now()
+		handler.ServeHTTP(rec, req)
+
+		if rec.Code != http.StatusOK {
+			t.Errorf("Expected status 200, got %d", rec.Code)
+		}
+
+		type iceServer struct {
+			URLs       string `json:"urls"`
+			Username   string `json:"username"`
+			Credential string `json:"credential"`
+		}
+		type response struct {
+			IceServers []iceServer `json:"iceServers"`
+		}
+
+		var resp response
+		if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
+			t.Fatalf("Failed to parse response JSON: %v", err)
+		}
+
+		if len(resp.IceServers) != 1 {
+			t.Fatalf("Expected 1 iceServer, got %d", len(resp.IceServers))
+		}
+
+		server := resp.IceServers[0]
+
+		// Verify URL matches the configured TURN_URL
+		if server.URLs != turnURL {
+			t.Errorf("Expected URLs %q, got %q", turnURL, server.URLs)
+		}
+
+		// Verify username format: {timestamp}:warp-lan
+		parts := strings.SplitN(server.Username, ":", 2)
+		if len(parts) != 2 {
+			t.Fatalf("Username should be in format 'timestamp:warp-lan', got %q", server.Username)
+		}
+		if parts[1] != "warp-lan" {
+			t.Errorf("Username suffix should be 'warp-lan', got %q", parts[1])
+		}
+
+		// Verify the timestamp is approximately 12 hours in the future
+		expiryTimestamp, err := strconv.ParseInt(parts[0], 10, 64)
+		if err != nil {
+			t.Fatalf("Username timestamp is not a valid integer: %v", err)
+		}
+		expectedExpiry := beforeRequest.Add(12 * time.Hour).Unix()
+		// Allow 5 seconds of drift for test execution time
+		if expiryTimestamp < expectedExpiry-5 || expiryTimestamp > expectedExpiry+5 {
+			t.Errorf("Expiry timestamp %d not within expected range around %d", expiryTimestamp, expectedExpiry)
+		}
+
+		// Verify credential is valid base64
+		credentialBytes, err := base64.StdEncoding.DecodeString(server.Credential)
+		if err != nil {
+			t.Fatalf("Credential is not valid base64: %v", err)
+		}
+
+		// Verify credential matches HMAC-SHA1(secret, username)
+		mac := hmac.New(sha1.New, []byte(turnSecret))
+		mac.Write([]byte(server.Username))
+		expectedMAC := mac.Sum(nil)
+
+		if !hmac.Equal(credentialBytes, expectedMAC) {
+			t.Error("Credential does not match expected HMAC-SHA1 value")
+		}
+	})
 }

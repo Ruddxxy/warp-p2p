@@ -15,9 +15,9 @@ import {
 
 describe('Security Module', () => {
   describe('generateRoomCode', () => {
-    it('generates a code in XX-XX format', () => {
+    it('generates a code in XXX-XXX format', () => {
       const code = generateRoomCode();
-      expect(code).toMatch(/^\d{2}-\d{2}$/);
+      expect(code).toMatch(/^\d{3}-\d{3}$/);
     });
 
     it('generates unique codes', () => {
@@ -25,17 +25,17 @@ describe('Security Module', () => {
       for (let i = 0; i < 100; i++) {
         codes.add(generateRoomCode());
       }
-      // With 10000 possible combinations, 100 codes should be mostly unique
+      // With 1,000,000 possible combinations, 100 codes should be mostly unique
       expect(codes.size).toBeGreaterThan(90);
     });
 
-    it('pads single digit numbers with leading zero', () => {
+    it('pads numbers with leading zeros', () => {
       // Generate multiple codes and check format
       for (let i = 0; i < 50; i++) {
         const code = generateRoomCode();
         const [first, second] = code.split('-');
-        expect(first.length).toBe(2);
-        expect(second.length).toBe(2);
+        expect(first.length).toBe(3);
+        expect(second.length).toBe(3);
       }
     });
   });
