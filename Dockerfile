@@ -17,7 +17,7 @@ COPY server/*.go ./
 RUN CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -ldflags="-w -s" -o signaling-server .
 
 # Create non-root user
-RUN addgroup -g 65534 -S app && adduser -u 65534 -S app -G app
+RUN addgroup -g 10001 -S app && adduser -u 10001 -S app -G app
 
 # Production stage - scratch for minimal image
 FROM scratch
