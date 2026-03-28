@@ -10,4 +10,4 @@ services:
       - key: ALLOWED_ORIGINS
         value: https://warp-p2p.vercel.app
       - key: CSP_CONNECT_SRC
-        value: "wss://*.onrender.com wss://*.vercel.app"
+        value: "wss://*.railway.app wss://*.onrender.com wss://*.vercel.app"
