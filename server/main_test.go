@@ -214,6 +214,46 @@ func TestSecurityHeaders(t *testing.T) {
 	}
 }
 
+func TestCSPConnectSrc_Dynamic(t *testing.T) {
+	t.Run("default without env var", func(t *testing.T) {
+		t.Setenv("CSP_CONNECT_SRC", "")
+		initCSPConnectSrc()
+
+		rec := httptest.NewRecorder()
+		setSecurityHeaders(rec)
+
+		csp := rec.Header().Get("Content-Security-Policy")
+		if !strings.Contains(csp, "connect-src 'self'") {
+			t.Error("CSP should contain connect-src 'self'")
+		}
+		if strings.Contains(csp, "b4a.run") {
+			t.Error("CSP should not contain hardcoded b4a.run")
+		}
+		if strings.Contains(csp, "fly.dev") {
+			t.Error("CSP should not contain hardcoded fly.dev")
+		}
+	})
+
+	t.Run("custom domains from env var", func(t *testing.T) {
+		t.Setenv("CSP_CONNECT_SRC", "wss://*.fly.dev wss://*.b4a.run")
+		initCSPConnectSrc()
+
+		rec := httptest.NewRecorder()
+		setSecurityHeaders(rec)
+
+		csp := rec.Header().Get("Content-Security-Policy")
+		if !strings.Contains(csp, "wss://*.fly.dev") {
+			t.Error("CSP should contain fly.dev wildcard")
+		}
+		if !strings.Contains(csp, "wss://*.b4a.run") {
+			t.Error("CSP should contain b4a.run wildcard")
+		}
+		if !strings.Contains(csp, "wss://localhost:*") {
+			t.Error("CSP should always contain localhost")
+		}
+	})
+}
+
 func TestCORSHeaders(t *testing.T) {
 	req := httptest.NewRequest("GET", "/", nil)
 	req.Header.Set("Origin", "http://localhost:3000")

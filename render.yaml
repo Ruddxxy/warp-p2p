@@ -1,0 +1,13 @@
+services:
+  - type: web
+    runtime: docker
+    name: warp-lan-signaling
+    plan: free
+    dockerfilePath: ./Dockerfile
+    healthCheckPath: /health
+    maxShutdownDelaySeconds: 30
+    envVars:
+      - key: ALLOWED_ORIGINS
+        value: https://warp-p2p.vercel.app
+      - key: CSP_CONNECT_SRC
+        value: "wss://*.onrender.com wss://*.vercel.app"

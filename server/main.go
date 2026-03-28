@@ -21,6 +21,22 @@ import (
 	"github.com/gorilla/websocket"
 )
 
+// cspConnectSrc is the CSP connect-src directive, computed once at startup.
+// Set CSP_CONNECT_SRC env var to allow WebSocket domains (space-separated).
+// Example: "wss://*.onrender.com wss://*.vercel.app"
+var cspConnectSrc string
+
+func initCSPConnectSrc() {
+	extra := os.Getenv("CSP_CONNECT_SRC")
+	if extra != "" {
+		cspConnectSrc = "'self' " + extra + " wss://localhost:* ws://localhost:*"
+	} else {
+		cspConnectSrc = "'self' wss://localhost:* ws://localhost:*"
+	}
+}
+
+func init() { initCSPConnectSrc() }
+
 // RateLimiter limits connections per IP using Go 1.21+ slices package
 type RateLimiter struct {
 	mu             sync.Mutex
@@ -166,7 +182,7 @@ func setSecurityHeaders(w http.ResponseWriter) {
 			"script-src 'self' 'unsafe-inline'; "+
 			"style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; "+
 			"font-src 'self' https://fonts.gstatic.com; "+
-			"connect-src 'self' wss://*.b4a.run wss://localhost:* ws://localhost:*; "+
+			"connect-src "+cspConnectSrc+"; "+
 			"img-src 'self' data: blob:; "+
 			"frame-ancestors 'none'; "+
 			"base-uri 'self';")

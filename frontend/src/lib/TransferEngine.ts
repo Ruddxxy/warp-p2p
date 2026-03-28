@@ -142,6 +142,14 @@ export class TransferEngine {
   private connectionTimeout: ReturnType<typeof setTimeout> | null = null;
   private static readonly CONNECTION_TIMEOUT_MS = 30_000;
 
+  // Handshake timeout — if handshake-verify never arrives (10 seconds)
+  private handshakeTimeout: ReturnType<typeof setTimeout> | null = null;
+  private static readonly HANDSHAKE_TIMEOUT_MS = 10_000;
+
+  // Data channel open timeout — after WebRTC connects but channel doesn't open (15 seconds)
+  private dataChannelTimeout: ReturnType<typeof setTimeout> | null = null;
+  private static readonly DATA_CHANNEL_TIMEOUT_MS = 15_000;
+
   constructor(signalingUrl: string, events: TransferEngineEvents = {}) {
     this.events = events;
     this.signalingUrl = signalingUrl;
@@ -171,11 +179,17 @@ export class TransferEngine {
       }
     });
 
-    // Handle peer leaving — error during any active phase, not just transferring
+    // Handle peer leaving — error during setup phases only
+    // During 'transferring', data flows via WebRTC data channel, not signaling.
+    // If peer truly disconnects, onconnectionstatechange → failed/disconnected handles it.
     this.signalingClient.on('peer-left', () => {
       logger.info('Engine', 'Peer left');
       this.events.onPeerDisconnected?.();
-      const activeStates: TransferState[] = ['connecting', 'handshaking', 'ready', 'transferring'];
+      if (this.state === 'transferring') {
+        logger.info('Engine', 'Peer-left during transfer (ignored — data flows via WebRTC)');
+        return;
+      }
+      const activeStates: TransferState[] = ['connecting', 'handshaking', 'ready'];
       if (activeStates.includes(this.state)) {
         this.handleError(new Error('Peer disconnected during transfer'));
       }
@@ -297,6 +311,7 @@ export class TransferEngine {
 
   private async initiateHandshake(): Promise<void> {
     this.setState('handshaking');
+    this.startHandshakeTimeout();
 
     const handshakeMsg = await this.securityManager.createHandshakeMessage();
     if (!this.signalingClient!.sendHandshakeVerify(handshakeMsg, this.peerId)) {
@@ -307,9 +322,26 @@ export class TransferEngine {
     logger.info('Engine', 'Sent handshake message');
   }
 
+  private startHandshakeTimeout(): void {
+    this.clearHandshakeTimeout();
+    this.handshakeTimeout = setTimeout(() => {
+      if (this.state === 'handshaking') {
+        this.handleError(new Error('Handshake timeout - peer did not respond'));
+      }
+    }, TransferEngine.HANDSHAKE_TIMEOUT_MS);
+  }
+
+  private clearHandshakeTimeout(): void {
+    if (this.handshakeTimeout) {
+      clearTimeout(this.handshakeTimeout);
+      this.handshakeTimeout = null;
+    }
+  }
+
   private async handleHandshakeVerify(msg: SignalingMessage): Promise<void> {
     if (!this.validatePayload(msg, ['publicKey'])) return;
 
+    this.clearHandshakeTimeout();
     this.setState('handshaking');
 
     const payload = msg.payload as HandshakeMessage;
@@ -384,6 +416,7 @@ export class TransferEngine {
       if (connState === 'connected') {
         this.clearConnectionTimeout();
         this.setState('ready');
+        this.startDataChannelTimeout();
       } else if (connState === 'failed') {
         // Ignore failures after successful completion
         if (this.state !== 'completed') {
@@ -427,6 +460,22 @@ export class TransferEngine {
     }
   }
 
+  private startDataChannelTimeout(): void {
+    this.clearDataChannelTimeout();
+    this.dataChannelTimeout = setTimeout(() => {
+      if (this.state === 'ready') {
+        this.handleError(new Error('Data channel failed to open - connection may be blocked'));
+      }
+    }, TransferEngine.DATA_CHANNEL_TIMEOUT_MS);
+  }
+
+  private clearDataChannelTimeout(): void {
+    if (this.dataChannelTimeout) {
+      clearTimeout(this.dataChannelTimeout);
+      this.dataChannelTimeout = null;
+    }
+  }
+
   private setupDataChannel(): void {
     if (!this.dataChannel) return;
 
@@ -434,6 +483,7 @@ export class TransferEngine {
 
     this.dataChannel.onopen = () => {
       logger.info('Engine', 'Data channel open');
+      this.clearDataChannelTimeout();
 
       if (this.role === 'sender') {
         // Send file metadata first
@@ -674,14 +724,26 @@ export class TransferEngine {
       }
 
       channel.bufferedAmountLowThreshold = BUFFER_THRESHOLD;
-      const timeout = setTimeout(() => {
+
+      const cleanup = () => {
+        clearTimeout(timeout);
         channel.onbufferedamountlow = null;
+        channel.removeEventListener('close', onClose);
+      };
+
+      const onClose = () => {
+        cleanup();
+        reject(new Error('Data channel closed during backpressure wait'));
+      };
+
+      const timeout = setTimeout(() => {
+        cleanup();
         reject(new Error('Transfer stalled - backpressure timeout'));
       }, 30_000);
 
+      channel.addEventListener('close', onClose);
       channel.onbufferedamountlow = () => {
-        clearTimeout(timeout);
-        channel.onbufferedamountlow = null;
+        cleanup();
         resolve();
       };
     });
@@ -718,7 +780,11 @@ export class TransferEngine {
     this.transferLogicallyComplete = true;
 
     if (this.writer) {
-      await this.writer.close();
+      try {
+        await this.writer.close();
+      } catch {
+        logger.warn('Engine', 'Writer close error (file may still be saved)');
+      }
       this.writer = null;
       this.writeStream = null;
     }
@@ -740,12 +806,16 @@ export class TransferEngine {
       this.events.onHashVerified?.(verified);
     }
 
-    // Send receipt confirmation
+    // Send receipt confirmation — guard against channel already closing
     const receipt: DataMessage = {
       type: 'receipt',
       status: verified ? 'verified' : 'failed'
     };
-    this.dataChannel!.send(JSON.stringify(receipt));
+    if (this.dataChannel && this.dataChannel.readyState === 'open') {
+      this.dataChannel.send(JSON.stringify(receipt));
+    } else {
+      logger.warn('Engine', 'Data channel closed before receipt could be sent');
+    }
 
     // Release hasher
     this.streamingHasher = null;
@@ -840,6 +910,8 @@ export class TransferEngine {
 
   private cleanup(): void {
     this.clearConnectionTimeout();
+    this.clearHandshakeTimeout();
+    this.clearDataChannelTimeout();
 
     this.dataChannel?.close();
     this.dataChannel = null;

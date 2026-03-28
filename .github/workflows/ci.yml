@@ -38,7 +38,7 @@ jobs:
       - name: Build
         run: npm run build
         env:
-          VITE_SIGNALING_URL: ${{ vars.VITE_SIGNALING_URL || 'wss://your-app.b4a.run/ws' }}
+          VITE_SIGNALING_URL: ${{ vars.VITE_SIGNALING_URL || 'wss://signal.example.com/ws' }}
 
       - name: Upload build artifacts
         uses: actions/upload-artifact@v4

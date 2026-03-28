@@ -118,6 +118,23 @@ class MockDataChannel {
   onmessage: ((e: { data: unknown }) => void) | null = null;
   onbufferedamountlow: (() => void) | null = null;
 
+  private _listeners: Map<string, Set<(...args: unknown[]) => void>> = new Map();
+
+  addEventListener = vi.fn((event: string, handler: (...args: unknown[]) => void) => {
+    if (!this._listeners.has(event)) {
+      this._listeners.set(event, new Set());
+    }
+    this._listeners.get(event)!.add(handler);
+  });
+
+  removeEventListener = vi.fn((event: string, handler: (...args: unknown[]) => void) => {
+    this._listeners.get(event)?.delete(handler);
+  });
+
+  dispatchEvent(event: string) {
+    this._listeners.get(event)?.forEach(fn => fn());
+  }
+
   send = vi.fn();
   close = vi.fn();
 }
@@ -405,6 +422,11 @@ describe('TransferEngine', () => {
 
       expect(events.onStateChange).toHaveBeenCalledWith('ready');
 
+      // Also open the data channel to clear the data channel timeout
+      const dc = latestDataChannel ?? new MockDataChannel();
+      dc.onopen?.();
+      await vi.advanceTimersByTimeAsync(0);
+
       // Advance past the 30s mark — no error should appear
       await vi.advanceTimersByTimeAsync(30_000);
 
@@ -513,7 +535,7 @@ describe('TransferEngine', () => {
       }
     );
 
-    it('triggers an error when peer-left fires during "transferring" state', async () => {
+    it('does NOT trigger an error when peer-left fires during "transferring" state (data via WebRTC)', async () => {
       const engine = new TransferEngine('ws://test/ws', events);
       await engine.joinRoom('123-456');
 
@@ -554,8 +576,10 @@ describe('TransferEngine', () => {
 
       expect(engine.getState()).toBe('transferring');
 
+      // peer-left during transferring should be ignored — data flows via WebRTC
       emitSignaling('peer-left', {});
-      expect(events.onError).toHaveBeenCalled();
+      expect(events.onError).not.toHaveBeenCalled();
+      expect(engine.getState()).toBe('transferring');
     });
 
     it('does NOT trigger an error when peer-left fires during "idle" state', () => {
@@ -814,6 +838,120 @@ describe('TransferEngine', () => {
       expect(events.onError).toHaveBeenCalled();
       const errorArg = (events.onError as Mock).mock.calls[0][0] as Error;
       expect(errorArg.message).toContain('closed during transfer');
+    });
+  });
+
+  // -----------------------------------------------------------------------
+  // Handshake timeout
+  // -----------------------------------------------------------------------
+  describe('Handshake timeout', () => {
+    it('fires error after 10s if handshake-verify never arrives (sender)', async () => {
+      const engine = new TransferEngine('ws://test/ws', events);
+      await engine.createRoom(createTestFile());
+
+      // Peer joins — sender initiates handshake and starts timeout
+      emitSignaling('peer-joined', { clientId: 'peer-1' });
+      await vi.advanceTimersByTimeAsync(0);
+
+      expect(engine.getState()).toBe('handshaking');
+
+      // Advance 10s — handshake timeout fires
+      await vi.advanceTimersByTimeAsync(10_000);
+
+      expect(events.onError).toHaveBeenCalled();
+      const errorArg = (events.onError as Mock).mock.calls[0][0] as Error;
+      expect(errorArg.message).toContain('Handshake timeout');
+    });
+
+    it('does NOT fire if handshake completes within 10s', async () => {
+      const engine = new TransferEngine('ws://test/ws', events);
+      await advanceThroughHandshake(engine, 'sender');
+
+      // Advance past 10s — no error
+      await vi.advanceTimersByTimeAsync(10_000);
+
+      expect(events.onError).not.toHaveBeenCalled();
+    });
+  });
+
+  // -----------------------------------------------------------------------
+  // Data channel open timeout
+  // -----------------------------------------------------------------------
+  describe('Data channel open timeout', () => {
+    it('fires error after 15s if data channel never opens', async () => {
+      const engine = new TransferEngine('ws://test/ws', events);
+      await advanceThroughHandshake(engine, 'sender');
+
+      // WebRTC connects — state = ready, data channel timeout starts
+      mockPcConnectionState = 'connected';
+      mockPcOnConnectionStateChange?.();
+      await vi.advanceTimersByTimeAsync(0);
+
+      expect(engine.getState()).toBe('ready');
+
+      // DO NOT open data channel — advance 15s
+      await vi.advanceTimersByTimeAsync(15_000);
+
+      expect(events.onError).toHaveBeenCalled();
+      const errorArg = (events.onError as Mock).mock.calls[0][0] as Error;
+      expect(errorArg.message).toContain('Data channel failed to open');
+    });
+
+    it('does NOT fire if data channel opens within 15s', async () => {
+      const engine = new TransferEngine('ws://test/ws', events);
+      await advanceThroughHandshake(engine, 'sender');
+
+      mockPcConnectionState = 'connected';
+      mockPcOnConnectionStateChange?.();
+      await vi.advanceTimersByTimeAsync(0);
+
+      // Open data channel before timeout
+      const dc = latestDataChannel ?? new MockDataChannel();
+      dc.onopen?.();
+      await vi.advanceTimersByTimeAsync(0);
+
+      // Advance past 15s — no error
+      await vi.advanceTimersByTimeAsync(15_000);
+
+      expect(events.onError).not.toHaveBeenCalled();
+    });
+  });
+
+  // -----------------------------------------------------------------------
+  // Backpressure: channel close during wait
+  // -----------------------------------------------------------------------
+  describe('Backpressure channel close', () => {
+    const BUFFER_THRESHOLD = 16 * 1024 * 1024;
+
+    it('rejects immediately when channel closes during backpressure wait', async () => {
+      const engine = new TransferEngine('ws://test/ws', events);
+      await advanceThroughHandshake(engine, 'sender');
+
+      mockPcConnectionState = 'connected';
+      mockPcOnConnectionStateChange?.();
+      await vi.advanceTimersByTimeAsync(0);
+
+      const dc = latestDataChannel;
+      dc.onopen?.();
+      await vi.advanceTimersByTimeAsync(0);
+
+      // Set high buffer to trigger backpressure
+      Object.defineProperty(dc, 'bufferedAmount', {
+        get: () => BUFFER_THRESHOLD + 1,
+        configurable: true,
+      });
+
+      // Trigger ack to start sending — will hit waitForBufferDrain
+      dc.onmessage?.({ data: JSON.stringify({ type: 'ack' }) });
+      await vi.advanceTimersByTimeAsync(0);
+
+      // Simulate channel close during backpressure wait
+      dc.dispatchEvent('close');
+      await vi.advanceTimersByTimeAsync(0);
+
+      expect(events.onError).toHaveBeenCalled();
+      const errorArg = (events.onError as Mock).mock.calls[0][0] as Error;
+      expect(errorArg.message).toContain('closed during backpressure');
     });
   });
 

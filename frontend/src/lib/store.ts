@@ -87,13 +87,13 @@ function getSignalingUrl(): string {
   const url = import.meta.env.VITE_SIGNALING_URL as string | undefined;
 
   if (!url) {
-    // Check if we're in production (not localhost)
     const isProduction = typeof window !== 'undefined' &&
       !window.location.hostname.includes('localhost') &&
       !window.location.hostname.includes('127.0.0.1');
 
     if (isProduction) {
       logger.error('Store', 'VITE_SIGNALING_URL not configured! Set this environment variable in your deployment platform.');
+      return '';
     }
     return 'ws://localhost:8080/ws';
   }
@@ -160,6 +160,12 @@ export const useTransferStore = create<TransferStore>((set, get) => ({
   },
 
   createRoom: async (file: File) => {
+    if (!SIGNALING_URL) {
+      const appError = mapErrorToAppError('Signaling server not configured');
+      set({ error: 'Signaling server not configured. Contact the app administrator.', state: 'error', appError });
+      return '';
+    }
+
     const { engine, initEngine } = get();
 
     if (!engine) {
@@ -182,6 +188,12 @@ export const useTransferStore = create<TransferStore>((set, get) => ({
   },
 
   joinRoom: async (code: string) => {
+    if (!SIGNALING_URL) {
+      const appError = mapErrorToAppError('Signaling server not configured');
+      set({ error: 'Signaling server not configured. Contact the app administrator.', state: 'error', appError });
+      return;
+    }
+
     const { engine, initEngine } = get();
 
     if (!engine) {
