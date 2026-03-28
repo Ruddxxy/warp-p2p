@@ -134,6 +134,14 @@ export class TransferEngine {
   // Used to ignore cleanup-related errors
   private transferLogicallyComplete = false;
 
+  // Message processing queue: serializes async chunk handling so decryption,
+  // hashing, and writing happen in order. Without this, concurrent onmessage
+  // events cause out-of-order writes and hash mismatch.
+  // Uses index-tracked dequeue (O(1) amortized) instead of Array.shift() (O(n)).
+  private messageQueue: (ArrayBuffer | string)[] = [];
+  private queueHead = 0;
+  private drainingQueue = false;
+
   // ICE candidate queue: buffer candidates until remote description is set
   private pendingIceCandidates: RTCIceCandidateInit[] = [];
   private remoteDescriptionSet = false;
@@ -506,14 +514,45 @@ export class TransferEngine {
       this.handleError(new Error('Data channel error'));
     };
 
-    this.dataChannel.onmessage = async (event) => {
-      try {
-        await this.handleDataMessage(event.data);
-      } catch (error) {
-        this.handleError(error instanceof Error ? error : new Error('Failed to handle data message'));
-      }
+    this.dataChannel.onmessage = (event) => {
+      this.enqueueMessage(event.data);
     };
 
+  }
+
+  // Enqueue a data channel message for serial processing.
+  // Called synchronously from onmessage — never awaits.
+  private enqueueMessage(data: ArrayBuffer | string): void {
+    this.messageQueue.push(data);
+    if (!this.drainingQueue) {
+      this.drainMessageQueue();
+    }
+  }
+
+  // Process queued messages one at a time. Each message fully completes
+  // (decrypt → hash → write) before the next starts, guaranteeing order.
+  private async drainMessageQueue(): Promise<void> {
+    this.drainingQueue = true;
+    try {
+      while (this.queueHead < this.messageQueue.length) {
+        const data = this.messageQueue[this.queueHead];
+        this.queueHead++;
+
+        // Compact: reclaim memory when 1024+ entries have been consumed
+        if (this.queueHead > 1024) {
+          this.messageQueue = this.messageQueue.slice(this.queueHead);
+          this.queueHead = 0;
+        }
+
+        try {
+          await this.handleDataMessage(data);
+        } catch (error) {
+          this.handleError(error instanceof Error ? error : new Error('Failed to handle data message'));
+        }
+      }
+    } finally {
+      this.drainingQueue = false;
+    }
   }
 
   private async createOffer(): Promise<void> {
@@ -937,6 +976,9 @@ export class TransferEngine {
     this.streamingHasher = null;
     this.pendingIceCandidates = [];
     this.remoteDescriptionSet = false;
+    this.messageQueue = [];
+    this.queueHead = 0;
+    this.drainingQueue = false;
   }
 
   // Cleanup on destroy
