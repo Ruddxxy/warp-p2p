@@ -3,19 +3,30 @@
  * Configures global mocks and polyfills for browser APIs
  */
 
-import { vi } from 'vitest';
+import { vi } from "vitest";
+
+// Mock crypto.randomUUID (not available in all test environments)
+if (!crypto.randomUUID) {
+  crypto.randomUUID = () => {
+    return "xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx".replace(/[xy]/g, (c) => {
+      const r = (Math.random() * 16) | 0;
+      const v = c === "x" ? r : (r & 0x3) | 0x8;
+      return v.toString(16);
+    }) as `${string}-${string}-${string}-${string}-${string}`;
+  };
+}
 
 // Mock crypto.subtle for tests (jsdom doesn't include full Web Crypto API)
 const mockCryptoKey = {
-  type: 'secret',
+  type: "secret",
   extractable: true,
-  algorithm: { name: 'AES-GCM', length: 256 },
-  usages: ['encrypt', 'decrypt']
+  algorithm: { name: "AES-GCM", length: 256 },
+  usages: ["encrypt", "decrypt"],
 } as CryptoKey;
 
 const mockKeyPair = {
   publicKey: mockCryptoKey,
-  privateKey: mockCryptoKey
+  privateKey: mockCryptoKey,
 } as CryptoKeyPair;
 
 // Mock crypto.subtle for tests (jsdom's implementation doesn't support mock keys)
@@ -50,35 +61,42 @@ const subtle = {
       hash[i] = (dataArray[i % dataArray.length] ?? i) ^ i;
     }
     return hash.buffer;
-  })
+  }),
 };
 
-Object.defineProperty(globalThis, 'crypto', {
+Object.defineProperty(globalThis, "crypto", {
   value: {
     subtle,
     getRandomValues: <T extends ArrayBufferView | null>(array: T): T => {
-      if (array && 'length' in array) {
+      if (array && "length" in array) {
         const arr = array as unknown as Uint8Array;
         for (let i = 0; i < arr.length; i++) {
           arr[i] = Math.floor(Math.random() * 256);
         }
       }
       return array;
-    }
+    },
+    randomUUID: () => {
+      return "xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx".replace(/[xy]/g, (c) => {
+        const r = (Math.random() * 16) | 0;
+        const v = c === "x" ? r : (r & 0x3) | 0x8;
+        return v.toString(16);
+      });
+    },
   },
-  writable: true
+  writable: true,
 });
 
 // Mock navigator.vibrate
-Object.defineProperty(navigator, 'vibrate', {
+Object.defineProperty(navigator, "vibrate", {
   value: vi.fn().mockReturnValue(true),
-  writable: true
+  writable: true,
 });
 
 // Mock navigator.onLine
-Object.defineProperty(navigator, 'onLine', {
+Object.defineProperty(navigator, "onLine", {
   value: true,
-  writable: true
+  writable: true,
 });
 
 // Mock sessionStorage
@@ -93,12 +111,12 @@ const sessionStorageMock = {
   }),
   clear: vi.fn(() => {
     sessionStorageMock.store = {};
-  })
+  }),
 };
 
-Object.defineProperty(globalThis, 'sessionStorage', {
+Object.defineProperty(globalThis, "sessionStorage", {
   value: sessionStorageMock,
-  writable: true
+  writable: true,
 });
 
 // Reset mocks between tests

@@ -1,13 +1,16 @@
-export type TransferRole = 'sender' | 'receiver';
+export type TransferRole = "sender" | "receiver";
 
 export type TransferState =
-  | 'idle'
-  | 'connecting'
-  | 'handshaking'
-  | 'ready'
-  | 'transferring'
-  | 'completed'
-  | 'error';
+  | "idle"
+  | "connecting"
+  | "handshaking"
+  | "ready"
+  | "preparing" // computing hashes for batch before transfer
+  | "transferring"
+  | "paused" // user-initiated pause (connection alive)
+  | "resuming" // reconnecting after pause/disconnect
+  | "completed"
+  | "error";
 
 export interface FileMetadata {
   name: string;
@@ -23,61 +26,153 @@ export interface TransferProgress {
   speed: number;
   speedHistory: number[];
   eta: number;
+  // Batch context — always present (single file = batch of 1)
+  fileIndex: number;
+  totalFiles: number;
+  batchBytesTransferred: number;
+  batchTotalBytes: number;
+  batchPercentage: number;
 }
 
-// File size constants
-export const MAX_FILE_SIZE = 25 * 1024 * 1024 * 1024 satisfies number; // 25GB
-export const MAX_FILE_SIZE_DISPLAY = '25 GB' as const;
+// --- Batch transfer types ---
+
+export interface BatchFileInfo {
+  id: string; // crypto.randomUUID()
+  name: string;
+  size: number;
+  type: string;
+}
+
+export interface BatchInfo {
+  totalFiles: number;
+  totalBytes: number;
+  files: BatchFileInfo[];
+}
+
+export type FileTransferStatusValue =
+  | "pending"
+  | "transferring"
+  | "completed"
+  | "failed"
+  | "skipped";
+
+export interface FileTransferStatus {
+  id: string;
+  name: string;
+  size: number;
+  status: FileTransferStatusValue;
+  bytesTransferred: number;
+  hash?: string;
+  verified?: boolean;
+  error?: string;
+}
+
+// No hard file size limit — streaming architecture handles any size.
+// Practical limit is disk space + browser tab lifetime.
+export const MAX_FILE_SIZE = Number.MAX_SAFE_INTEGER;
+export const MAX_FILE_SIZE_DISPLAY = "unlimited" as const;
 
 // Custom error for file size validation
 export class FileSizeError extends Error {
   constructor(fileSize: number) {
     const sizeDisplay = formatFileSize(fileSize);
     super(`File size (${sizeDisplay}) exceeds maximum allowed size of ${MAX_FILE_SIZE_DISPLAY}`);
-    this.name = 'FileSizeError';
+    this.name = "FileSizeError";
   }
 }
 
 // Utility function to format file size
 export function formatFileSize(bytes: number): string {
-  if (bytes === 0) return '0 B';
+  if (bytes === 0) return "0 B";
   const k = 1024;
-  const sizes = ['B', 'KB', 'MB', 'GB', 'TB'] as const;
+  const sizes = ["B", "KB", "MB", "GB", "TB"] as const;
   const i = Math.floor(Math.log(bytes) / Math.log(k));
   return `${parseFloat((bytes / Math.pow(k, i)).toFixed(2))} ${sizes[i]}`;
 }
 
 // --- File category detection ---
 
-export type FileCategory = 'image' | 'video' | 'audio' | 'document' | 'archive' | 'code' | 'other';
+export type FileCategory = "image" | "video" | "audio" | "document" | "archive" | "code" | "other";
 
 const extensionToCategory: Record<string, FileCategory> = {
   // Image
-  jpg: 'image', jpeg: 'image', png: 'image', gif: 'image', webp: 'image',
-  svg: 'image', bmp: 'image', ico: 'image', tiff: 'image', avif: 'image',
+  jpg: "image",
+  jpeg: "image",
+  png: "image",
+  gif: "image",
+  webp: "image",
+  svg: "image",
+  bmp: "image",
+  ico: "image",
+  tiff: "image",
+  avif: "image",
   // Video
-  mp4: 'video', mkv: 'video', avi: 'video', mov: 'video', webm: 'video',
-  flv: 'video', wmv: 'video', m4v: 'video',
+  mp4: "video",
+  mkv: "video",
+  avi: "video",
+  mov: "video",
+  webm: "video",
+  flv: "video",
+  wmv: "video",
+  m4v: "video",
   // Audio
-  mp3: 'audio', wav: 'audio', ogg: 'audio', flac: 'audio', aac: 'audio',
-  wma: 'audio', m4a: 'audio', opus: 'audio',
+  mp3: "audio",
+  wav: "audio",
+  ogg: "audio",
+  flac: "audio",
+  aac: "audio",
+  wma: "audio",
+  m4a: "audio",
+  opus: "audio",
   // Document
-  pdf: 'document', doc: 'document', docx: 'document', xls: 'document',
-  xlsx: 'document', ppt: 'document', pptx: 'document', txt: 'document',
-  csv: 'document', rtf: 'document', odt: 'document', ods: 'document',
+  pdf: "document",
+  doc: "document",
+  docx: "document",
+  xls: "document",
+  xlsx: "document",
+  ppt: "document",
+  pptx: "document",
+  txt: "document",
+  csv: "document",
+  rtf: "document",
+  odt: "document",
+  ods: "document",
   // Archive
-  zip: 'archive', rar: 'archive', '7z': 'archive', tar: 'archive',
-  gz: 'archive', bz2: 'archive', xz: 'archive', dmg: 'archive', iso: 'archive',
+  zip: "archive",
+  rar: "archive",
+  "7z": "archive",
+  tar: "archive",
+  gz: "archive",
+  bz2: "archive",
+  xz: "archive",
+  dmg: "archive",
+  iso: "archive",
   // Code
-  js: 'code', ts: 'code', jsx: 'code', tsx: 'code', py: 'code',
-  rb: 'code', go: 'code', rs: 'code', java: 'code', c: 'code',
-  cpp: 'code', h: 'code', css: 'code', html: 'code', json: 'code',
-  xml: 'code', yaml: 'code', yml: 'code', sh: 'code', sql: 'code',
+  js: "code",
+  ts: "code",
+  jsx: "code",
+  tsx: "code",
+  py: "code",
+  rb: "code",
+  go: "code",
+  rs: "code",
+  java: "code",
+  c: "code",
+  cpp: "code",
+  h: "code",
+  css: "code",
+  html: "code",
+  json: "code",
+  xml: "code",
+  yaml: "code",
+  yml: "code",
+  sh: "code",
+  sql: "code",
 };
 
 export function getFileCategory(fileName: string): FileCategory {
-  const ext = fileName.split('.').pop()?.toLowerCase() ?? '';
-  return extensionToCategory[ext] ?? 'other';
+  const ext = fileName.split(".").pop()?.toLowerCase() ?? "";
+  return extensionToCategory[ext] ?? "other";
 }
 
 // --- Transfer time estimate ---
@@ -85,9 +180,9 @@ export function getFileCategory(fileName: string): FileCategory {
 const ASSUMED_WIFI_SPEED_BYTES = 5 * 1024 * 1024; // ~5 MB/s
 
 export function getEstimatedTransferTime(bytes: number): string {
-  if (bytes <= 0) return 'instant';
+  if (bytes <= 0) return "instant";
   const seconds = bytes / ASSUMED_WIFI_SPEED_BYTES;
-  if (seconds < 1) return '< 1 sec';
+  if (seconds < 1) return "< 1 sec";
   if (seconds < 60) return `~${Math.ceil(seconds)} sec`;
   const minutes = Math.ceil(seconds / 60);
   return `~${minutes} min`;
@@ -109,191 +204,207 @@ interface ErrorMapping {
 
 const errorMappings: ErrorMapping[] = [
   {
-    match: 'wrong code',
+    match: "No one joined",
     error: {
-      code: 'WRONG_CODE',
-      message: 'Invalid transfer code',
-      suggestion: 'Double-check the 6-digit code and try again.',
+      code: "PEER_NOT_FOUND",
+      message: "No one is sharing with this code",
+      suggestion: "The sender may have disconnected. Ask them for a new code.",
       recoverable: true,
     },
   },
   {
-    match: 'Room expired',
+    match: "wrong code",
     error: {
-      code: 'ROOM_EXPIRED',
-      message: 'Session expired',
-      suggestion: 'The sender needs to share a new code. Ask them to start again.',
+      code: "WRONG_CODE",
+      message: "Invalid transfer code",
+      suggestion: "Double-check the 6-digit code and try again.",
       recoverable: true,
     },
   },
   {
-    match: 'Peer disconnected',
+    match: "Room expired",
     error: {
-      code: 'PEER_DISCONNECTED',
-      message: 'Peer disconnected',
-      suggestion: 'The other device left. Make sure both devices stay on the same network.',
+      code: "ROOM_EXPIRED",
+      message: "Session expired",
+      suggestion: "The sender needs to share a new code. Ask them to start again.",
       recoverable: true,
     },
   },
   {
-    match: 'Peer connection failed',
+    match: "Peer disconnected",
     error: {
-      code: 'CONNECTION_FAILED',
-      message: 'Could not connect to peer',
-      suggestion: 'Both devices must be on the same WiFi network. Check your connection and try again.',
+      code: "PEER_DISCONNECTED",
+      message: "Peer disconnected",
+      suggestion: "The other device left. Make sure both devices stay on the same network.",
       recoverable: true,
     },
   },
   {
-    match: 'Data channel error',
+    match: "Peer connection failed",
     error: {
-      code: 'CHANNEL_ERROR',
-      message: 'Connection dropped',
-      suggestion: 'The transfer was interrupted. Try again — it usually works on a second attempt.',
+      code: "CONNECTION_FAILED",
+      message: "Could not connect to peer",
+      suggestion:
+        "Both devices must be on the same WiFi network. Check your connection and try again.",
       recoverable: true,
     },
   },
   {
-    match: 'Connection timeout',
+    match: "Data channel error",
     error: {
-      code: 'CONNECTION_TIMEOUT',
-      message: 'Server is not responding',
-      suggestion: 'The signaling server may be down. Try again in a moment.',
+      code: "CHANNEL_ERROR",
+      message: "Connection dropped",
+      suggestion: "The transfer was interrupted. Try again — it usually works on a second attempt.",
       recoverable: true,
     },
   },
   {
-    match: 'Could not connect to server',
+    match: "Connection timeout",
     error: {
-      code: 'SERVER_UNREACHABLE',
-      message: 'Cannot reach the server',
-      suggestion: 'Check your internet connection. A firewall may be blocking WebSocket connections.',
+      code: "CONNECTION_TIMEOUT",
+      message: "Server is not responding",
+      suggestion: "The signaling server may be down. Try again in a moment.",
       recoverable: true,
     },
   },
   {
-    match: 'Connection closed before',
+    match: "Could not connect to server",
     error: {
-      code: 'CONNECTION_REJECTED',
-      message: 'Connection was rejected',
-      suggestion: 'The server closed the connection. Wait a minute and try again.',
+      code: "SERVER_UNREACHABLE",
+      message: "Cannot reach the server",
+      suggestion:
+        "Check your internet connection. A firewall may be blocking WebSocket connections.",
       recoverable: true,
     },
   },
   {
-    match: 'Signaling error',
+    match: "Connection closed before",
     error: {
-      code: 'SIGNALING_ERROR',
-      message: 'Server connection lost',
-      suggestion: 'Check your internet connection and try again.',
+      code: "CONNECTION_REJECTED",
+      message: "Connection was rejected",
+      suggestion: "The server closed the connection. Wait a minute and try again.",
       recoverable: true,
     },
   },
   {
-    match: 'Room is full',
+    match: "Signaling error",
     error: {
-      code: 'ROOM_FULL',
-      message: 'Room is full',
-      suggestion: 'This room already has two peers connected. Check your code and try again.',
+      code: "SIGNALING_ERROR",
+      message: "Server connection lost",
+      suggestion: "Check your internet connection and try again.",
       recoverable: true,
     },
   },
   {
-    match: 'Room ID required',
+    match: "Room is full",
     error: {
-      code: 'INVALID_REQUEST',
-      message: 'Invalid request',
-      suggestion: 'Something went wrong. Please try again.',
+      code: "ROOM_FULL",
+      message: "Room is full",
+      suggestion: "This room already has two peers connected. Check your code and try again.",
       recoverable: true,
     },
   },
   {
-    match: 'Must join a room',
+    match: "Room ID required",
     error: {
-      code: 'INVALID_REQUEST',
-      message: 'Connection error',
-      suggestion: 'Messages were sent before joining a room. Please try again.',
+      code: "INVALID_REQUEST",
+      message: "Invalid request",
+      suggestion: "Something went wrong. Please try again.",
       recoverable: true,
     },
   },
   {
-    match: 'Failed to join room',
+    match: "Must join a room",
     error: {
-      code: 'JOIN_FAILED',
-      message: 'Could not join room',
-      suggestion: 'Server connection was lost. Check your internet and try again.',
+      code: "INVALID_REQUEST",
+      message: "Connection error",
+      suggestion: "Messages were sent before joining a room. Please try again.",
       recoverable: true,
     },
   },
   {
-    match: 'Failed to send offer',
+    match: "Failed to join room",
     error: {
-      code: 'SIGNALING_LOST_SETUP',
-      message: 'Lost connection to server',
-      suggestion: 'The signaling server disconnected during setup. Check your internet and try again.',
+      code: "JOIN_FAILED",
+      message: "Could not join room",
+      suggestion: "Server connection was lost. Check your internet and try again.",
       recoverable: true,
     },
   },
   {
-    match: 'Failed to send answer',
+    match: "Failed to send offer",
     error: {
-      code: 'SIGNALING_LOST_SETUP',
-      message: 'Lost connection to server',
-      suggestion: 'The signaling server disconnected during setup. Check your internet and try again.',
+      code: "SIGNALING_LOST_SETUP",
+      message: "Lost connection to server",
+      suggestion:
+        "The signaling server disconnected during setup. Check your internet and try again.",
       recoverable: true,
     },
   },
   {
-    match: 'Failed to send handshake',
+    match: "Failed to send answer",
     error: {
-      code: 'SIGNALING_LOST_SETUP',
-      message: 'Lost connection to server',
-      suggestion: 'The signaling server disconnected during setup. Check your internet and try again.',
+      code: "SIGNALING_LOST_SETUP",
+      message: "Lost connection to server",
+      suggestion:
+        "The signaling server disconnected during setup. Check your internet and try again.",
       recoverable: true,
     },
   },
   {
-    match: 'WebRTC connection timed out',
+    match: "Failed to send handshake",
     error: {
-      code: 'WEBRTC_TIMEOUT',
-      message: 'Connection timed out',
-      suggestion: 'Could not establish a direct connection. A firewall or strict network may be blocking WebRTC. Try a different network.',
+      code: "SIGNALING_LOST_SETUP",
+      message: "Lost connection to server",
+      suggestion:
+        "The signaling server disconnected during setup. Check your internet and try again.",
       recoverable: true,
     },
   },
   {
-    match: 'Server connection lost during setup',
+    match: "WebRTC connection timed out",
     error: {
-      code: 'SIGNALING_LOST_SETUP',
-      message: 'Lost connection to server',
-      suggestion: 'The signaling server disconnected during setup. Check your internet and try again.',
+      code: "WEBRTC_TIMEOUT",
+      message: "Connection timed out",
+      suggestion:
+        "Could not establish a direct connection. A firewall or strict network may be blocking WebRTC. Try a different network.",
       recoverable: true,
     },
   },
   {
-    match: 'Decryption failed',
+    match: "Server connection lost during setup",
     error: {
-      code: 'DECRYPTION_FAILED',
-      message: 'Decryption failed',
-      suggestion: 'The data was corrupted in transit. Try the transfer again.',
+      code: "SIGNALING_LOST_SETUP",
+      message: "Lost connection to server",
+      suggestion:
+        "The signaling server disconnected during setup. Check your internet and try again.",
       recoverable: true,
     },
   },
   {
-    match: 'integrity check failed',
+    match: "Decryption failed",
     error: {
-      code: 'INTEGRITY_FAILED',
-      message: 'File verification failed',
-      suggestion: 'The file was corrupted during transfer. Please try again.',
+      code: "DECRYPTION_FAILED",
+      message: "Decryption failed",
+      suggestion: "The data was corrupted in transit. Try the transfer again.",
       recoverable: true,
     },
   },
   {
-    match: 'hash verification failed',
+    match: "integrity check failed",
     error: {
-      code: 'HASH_FAILED',
-      message: 'File verification failed',
-      suggestion: 'The received file does not match the original. Try sending again.',
+      code: "INTEGRITY_FAILED",
+      message: "File verification failed",
+      suggestion: "The file was corrupted during transfer. Please try again.",
+      recoverable: true,
+    },
+  },
+  {
+    match: "hash verification failed",
+    error: {
+      code: "HASH_FAILED",
+      message: "File verification failed",
+      suggestion: "The received file does not match the original. Try sending again.",
       recoverable: true,
     },
   },
@@ -307,13 +418,13 @@ export function mapErrorToAppError(rawMessage: string): AppError {
     }
   }
   return {
-    code: 'UNKNOWN',
-    message: 'Something went wrong',
-    suggestion: 'Try again. If the problem persists, refresh the page.',
+    code: "UNKNOWN",
+    message: "Something went wrong",
+    suggestion: "Try again. If the problem persists, refresh the page.",
     recoverable: true,
   };
 }
 
 // --- Connection phase ---
 
-export type ConnectionPhase = 'waiting-for-peer' | 'peer-connected' | 'securing' | 'ready';
+export type ConnectionPhase = "waiting-for-peer" | "peer-connected" | "securing" | "ready";

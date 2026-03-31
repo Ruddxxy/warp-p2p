@@ -1,10 +1,10 @@
 # Warp
 
-Warp is a free, open-source, peer-to-peer file transfer tool that runs in your browser. Files are encrypted end-to-end with AES-256-GCM and sent directly between devices using WebRTC. No account, no server storage, no tracking. Supports files up to 25 GB.
+Warp is a free, open-source, peer-to-peer file transfer tool that runs in your browser. Files are encrypted end-to-end with AES-256-GCM and sent directly between devices using WebRTC. No account, no server storage, no tracking. No file size limit — streams directly to disk.
 
 ## Key Pages
 
-- [Homepage](https://warp-lan.vercel.app/): Send files instantly — peer-to-peer, encrypted, no signup
+- [Homepage](https://warp-p2p.vercel.app/): Send files instantly — peer-to-peer, encrypted, no signup
 
 ## How It Works
 

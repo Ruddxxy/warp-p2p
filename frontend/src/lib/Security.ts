@@ -9,15 +9,15 @@
  * 4. Final session key is derived from ECDH + code verification
  */
 
-import { logger } from './logger';
+import { logger } from "./logger";
 
 // Generate a random room code (e.g., "742-291") — 6 digits = 1M combinations
 export function generateRoomCode(): string {
   const array = new Uint8Array(4);
   crypto.getRandomValues(array);
-  const num1 = (array[0] << 8 | array[1]) % 1000;
-  const num2 = (array[2] << 8 | array[3]) % 1000;
-  return `${num1.toString().padStart(3, '0')}-${num2.toString().padStart(3, '0')}`;
+  const num1 = ((array[0] << 8) | array[1]) % 1000;
+  const num2 = ((array[2] << 8) | array[3]) % 1000;
+  return `${num1.toString().padStart(3, "0")}-${num2.toString().padStart(3, "0")}`;
 }
 
 // Derive a key from the room code using PBKDF2
@@ -26,28 +26,25 @@ async function deriveKeyFromCode(code: string): Promise<CryptoKey> {
   const codeData = encoder.encode(code);
 
   // Import code as key material
-  const keyMaterial = await crypto.subtle.importKey(
-    'raw',
-    codeData,
-    'PBKDF2',
-    false,
-    ['deriveBits', 'deriveKey']
-  );
+  const keyMaterial = await crypto.subtle.importKey("raw", codeData, "PBKDF2", false, [
+    "deriveBits",
+    "deriveKey",
+  ]);
 
-  // Use a fixed salt for code derivation (both peers will derive the same key)
-  const salt = encoder.encode('warp-lan-v1-salt');
+  // Include code in salt to prevent precomputation of all 1M codes with a single table
+  const salt = encoder.encode(`warp-lan-v1:${code}`);
 
   return crypto.subtle.deriveKey(
     {
-      name: 'PBKDF2',
+      name: "PBKDF2",
       salt,
       iterations: 100000,
-      hash: 'SHA-256'
+      hash: "SHA-256",
     },
     keyMaterial,
-    { name: 'AES-GCM', length: 256 },
+    { name: "AES-GCM", length: 256 },
     true,
-    ['encrypt', 'decrypt']
+    ["encrypt", "decrypt"],
   );
 }
 
@@ -55,53 +52,52 @@ async function deriveKeyFromCode(code: string): Promise<CryptoKey> {
 async function generateECDHKeyPair(): Promise<CryptoKeyPair> {
   return crypto.subtle.generateKey(
     {
-      name: 'ECDH',
-      namedCurve: 'P-256'
+      name: "ECDH",
+      namedCurve: "P-256",
     },
     true,
-    ['deriveBits']
+    ["deriveBits"],
   );
 }
 
 // Export public key to raw bytes
 async function exportPublicKey(key: CryptoKey): Promise<ArrayBuffer> {
-  return crypto.subtle.exportKey('raw', key);
+  return crypto.subtle.exportKey("raw", key);
 }
 
 // Import peer's public key
 async function importPublicKey(rawKey: ArrayBuffer): Promise<CryptoKey> {
   return crypto.subtle.importKey(
-    'raw',
+    "raw",
     rawKey,
     {
-      name: 'ECDH',
-      namedCurve: 'P-256'
+      name: "ECDH",
+      namedCurve: "P-256",
     },
     true,
-    []
+    [],
   );
 }
 
 // Derive shared secret from ECDH
-async function deriveSharedSecret(privateKey: CryptoKey, publicKey: CryptoKey): Promise<ArrayBuffer> {
+async function deriveSharedSecret(
+  privateKey: CryptoKey,
+  publicKey: CryptoKey,
+): Promise<ArrayBuffer> {
   return crypto.subtle.deriveBits(
     {
-      name: 'ECDH',
-      public: publicKey
+      name: "ECDH",
+      public: publicKey,
     },
     privateKey,
-    256
+    256,
   );
 }
 
 // Encrypt data with AES-GCM
 export async function encrypt(key: CryptoKey, data: ArrayBuffer): Promise<ArrayBuffer> {
   const iv = crypto.getRandomValues(new Uint8Array(12));
-  const encrypted = await crypto.subtle.encrypt(
-    { name: 'AES-GCM', iv },
-    key,
-    data
-  );
+  const encrypted = await crypto.subtle.encrypt({ name: "AES-GCM", iv }, key, data);
 
   // Prepend IV to ciphertext
   const result = new Uint8Array(iv.length + encrypted.byteLength);
@@ -116,41 +112,41 @@ export async function decrypt(key: CryptoKey, data: ArrayBuffer): Promise<ArrayB
   const iv = dataArray.slice(0, 12);
   const ciphertext = dataArray.slice(12);
 
-  return crypto.subtle.decrypt(
-    { name: 'AES-GCM', iv },
-    key,
-    ciphertext
-  );
+  return crypto.subtle.decrypt({ name: "AES-GCM", iv }, key, ciphertext);
 }
 
 // HMAC for message authentication
 async function computeHMAC(key: CryptoKey, data: ArrayBuffer): Promise<ArrayBuffer> {
   const hmacKey = await crypto.subtle.importKey(
-    'raw',
-    await crypto.subtle.exportKey('raw', key),
-    { name: 'HMAC', hash: 'SHA-256' },
+    "raw",
+    await crypto.subtle.exportKey("raw", key),
+    { name: "HMAC", hash: "SHA-256" },
     false,
-    ['sign']
+    ["sign"],
   );
-  return crypto.subtle.sign('HMAC', hmacKey, data);
+  return crypto.subtle.sign("HMAC", hmacKey, data);
 }
 
 // Verify HMAC
-async function verifyHMAC(key: CryptoKey, data: ArrayBuffer, signature: ArrayBuffer): Promise<boolean> {
+async function verifyHMAC(
+  key: CryptoKey,
+  data: ArrayBuffer,
+  signature: ArrayBuffer,
+): Promise<boolean> {
   const hmacKey = await crypto.subtle.importKey(
-    'raw',
-    await crypto.subtle.exportKey('raw', key),
-    { name: 'HMAC', hash: 'SHA-256' },
+    "raw",
+    await crypto.subtle.exportKey("raw", key),
+    { name: "HMAC", hash: "SHA-256" },
     false,
-    ['verify']
+    ["verify"],
   );
-  return crypto.subtle.verify('HMAC', hmacKey, signature, data);
+  return crypto.subtle.verify("HMAC", hmacKey, signature, data);
 }
 
 // Convert ArrayBuffer to base64
 export function arrayBufferToBase64(buffer: ArrayBuffer): string {
   const bytes = new Uint8Array(buffer);
-  let binary = '';
+  let binary = "";
   for (let i = 0; i < bytes.byteLength; i++) {
     binary += String.fromCharCode(bytes[i]);
   }
@@ -175,9 +171,9 @@ export interface HandshakeState {
 }
 
 export interface HandshakeMessage {
-  publicKey: string;       // Base64 encoded public key
-  signature: string;       // Base64 encoded HMAC
-  nonce: string;          // Base64 encoded random nonce
+  publicKey: string; // Base64 encoded public key
+  signature: string; // Base64 encoded HMAC
+  nonce: string; // Base64 encoded random nonce
 }
 
 /**
@@ -185,22 +181,24 @@ export interface HandshakeMessage {
  */
 export class SecurityManager {
   private state: HandshakeState | null = null;
+  private roomCode = "";
 
   // Initialize with room code
   async init(code: string): Promise<void> {
+    this.roomCode = code;
     const keyPair = await generateECDHKeyPair();
     const codeKey = await deriveKeyFromCode(code);
 
     this.state = {
       keyPair,
       codeKey,
-      verified: false
+      verified: false,
     };
   }
 
   // Generate handshake message to send to peer
   async createHandshakeMessage(): Promise<HandshakeMessage> {
-    if (!this.state) throw new Error('SecurityManager not initialized');
+    if (!this.state) throw new Error("SecurityManager not initialized");
 
     const publicKeyRaw = await exportPublicKey(this.state.keyPair.publicKey);
     const nonce = crypto.getRandomValues(new Uint8Array(16));
@@ -215,13 +213,13 @@ export class SecurityManager {
     return {
       publicKey: arrayBufferToBase64(publicKeyRaw),
       signature: arrayBufferToBase64(signature),
-      nonce: arrayBufferToBase64(nonce.buffer)
+      nonce: arrayBufferToBase64(nonce.buffer),
     };
   }
 
   // Process peer's handshake message and derive session key
   async processHandshakeMessage(message: HandshakeMessage): Promise<boolean> {
-    if (!this.state) throw new Error('SecurityManager not initialized');
+    if (!this.state) throw new Error("SecurityManager not initialized");
 
     try {
       const peerPublicKeyRaw = base64ToArrayBuffer(message.publicKey);
@@ -236,7 +234,7 @@ export class SecurityManager {
       const isValid = await verifyHMAC(this.state.codeKey, dataToVerify.buffer, peerSignature);
 
       if (!isValid) {
-        logger.error('Security', 'Handshake verification failed - wrong code?');
+        logger.error("Security", "Handshake verification failed - wrong code?");
         return false;
       }
 
@@ -245,31 +243,27 @@ export class SecurityManager {
       const sharedSecret = await deriveSharedSecret(this.state.keyPair.privateKey, peerPublicKey);
 
       // Derive session key from shared secret
-      const sessionKeyMaterial = await crypto.subtle.importKey(
-        'raw',
-        sharedSecret,
-        'HKDF',
-        false,
-        ['deriveKey']
-      );
+      const sessionKeyMaterial = await crypto.subtle.importKey("raw", sharedSecret, "HKDF", false, [
+        "deriveKey",
+      ]);
 
       this.state.sessionKey = await crypto.subtle.deriveKey(
         {
-          name: 'HKDF',
-          salt: new TextEncoder().encode('warp-lan-session'),
-          info: new TextEncoder().encode('encryption'),
-          hash: 'SHA-256'
+          name: "HKDF",
+          salt: new TextEncoder().encode("warp-lan-session"),
+          info: new TextEncoder().encode(`warp-lan-v1:${this.roomCode}:encryption`),
+          hash: "SHA-256",
         },
         sessionKeyMaterial,
-        { name: 'AES-GCM', length: 256 },
+        { name: "AES-GCM", length: 256 },
         true,
-        ['encrypt', 'decrypt']
+        ["encrypt", "decrypt"],
       );
 
       this.state.verified = true;
       return true;
-    } catch (error) {
-      logger.error('Security', 'Handshake processing failed');
+    } catch {
+      logger.error("Security", "Handshake processing failed");
       return false;
     }
   }
@@ -286,20 +280,23 @@ export class SecurityManager {
 
   // Encrypt chunk for transfer
   async encryptChunk(data: ArrayBuffer): Promise<ArrayBuffer> {
-    if (!this.state?.sessionKey) throw new Error('No session key established');
+    if (!this.state?.sessionKey) throw new Error("No session key established");
     return encrypt(this.state.sessionKey, data);
   }
 
   // Decrypt chunk from transfer
   async decryptChunk(data: ArrayBuffer): Promise<ArrayBuffer> {
     if (!this.state?.sessionKey) {
-      logger.error('Security', 'No session key established for decryption');
-      throw new Error('No session key established');
+      logger.error("Security", "No session key established for decryption");
+      throw new Error("No session key established");
     }
     try {
       return await decrypt(this.state.sessionKey, data);
     } catch (error) {
-      logger.error('Security', 'Decryption failed', { dataSize: data.byteLength, hasSessionKey: !!this.state.sessionKey });
+      logger.error("Security", "Decryption failed", {
+        dataSize: data.byteLength,
+        hasSessionKey: !!this.state.sessionKey,
+      });
       throw error;
     }
   }

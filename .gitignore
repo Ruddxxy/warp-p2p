@@ -60,6 +60,8 @@ __debug_bin*
 
 # Testing
 .vitest/
+test-results/
+playwright-report/
 
 # Vercel
 .vercel
@@ -71,6 +73,5 @@ __debug_bin*
 .claude/
 plan.md
 
-# Planning docs
+# Planning docs (not project docs)
 ROADMAP.md
-DEPLOY.md

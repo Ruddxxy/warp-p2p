@@ -1,6 +1,6 @@
 User-agent: *
 Allow: /
-Sitemap: https://warp-lan.vercel.app/sitemap.xml
+Sitemap: https://warp-p2p.vercel.app/sitemap.xml
 
 # AI Search Crawlers — explicitly allowed
 User-agent: GPTBot

@@ -3,19 +3,19 @@
  * Used to exchange WebRTC offer/answer/ICE candidates and PAKE handshake messages
  */
 
-import { logger } from './logger';
+import { logger } from "./logger";
 
 export type MessageType =
-  | 'offer'
-  | 'answer'
-  | 'ice-candidate'
-  | 'handshake-init'
-  | 'handshake-verify'
-  | 'connected'
-  | 'error'
-  | 'peer-joined'
-  | 'peer-left'
-  | 'room-expired';
+  | "offer"
+  | "answer"
+  | "ice-candidate"
+  | "handshake-init"
+  | "handshake-verify"
+  | "connected"
+  | "error"
+  | "peer-joined"
+  | "peer-left"
+  | "room-expired";
 
 export interface SignalingMessage {
   type: MessageType;
@@ -38,8 +38,8 @@ export interface SignalingClientConfig {
 
 export class SignalingClient {
   private ws: WebSocket | null = null;
-  private clientId: string = '';
-  private roomId: string = '';
+  private clientId: string = "";
+  private roomId: string = "";
   private messageHandlers: Map<MessageType, Set<MessageHandler>> = new Map();
   private config: SignalingClientConfig;
   private reconnectAttempts = 0;
@@ -70,7 +70,7 @@ export class SignalingClient {
       };
 
       const timer = setTimeout(() => {
-        settle(reject, new Error('Connection timeout: server did not respond within 10 seconds'));
+        settle(reject, new Error("Connection timeout: server did not respond within 10 seconds"));
         this.ws?.close();
       }, SignalingClient.CONNECTION_TIMEOUT_MS);
 
@@ -78,28 +78,32 @@ export class SignalingClient {
         this.ws = new WebSocket(this.config.url);
 
         this.ws.onopen = () => {
-          logger.info('Signaling', 'Connected to server');
+          logger.info("Signaling", "Connected to server");
           this.reconnectAttempts = 0;
           this.isReconnecting = false;
           this.config.onOpen?.();
         };
 
         this.ws.onclose = () => {
-          logger.info('Signaling', 'Disconnected from server');
+          logger.info("Signaling", "Disconnected from server");
           this.config.onClose?.();
           if (!settled) {
-            settle(reject, new Error('Connection closed before server acknowledged the connection'));
+            settle(
+              reject,
+              new Error("Connection closed before server acknowledged the connection"),
+            );
           } else {
             this.attemptReconnect();
           }
         };
 
         this.ws.onerror = (event) => {
-          logger.error('Signaling', 'WebSocket error');
+          logger.error("Signaling", "WebSocket error");
           this.config.onError?.(event);
-          const error = this.ws?.readyState === WebSocket.CONNECTING
-            ? new Error('Could not connect to server. Check your internet connection.')
-            : new Error('Connection to server lost unexpectedly');
+          const error =
+            this.ws?.readyState === WebSocket.CONNECTING
+              ? new Error("Could not connect to server. Check your internet connection.")
+              : new Error("Connection to server lost unexpectedly");
           settle(reject, error);
         };
 
@@ -107,18 +111,19 @@ export class SignalingClient {
           try {
             const message: SignalingMessage = JSON.parse(event.data);
             // Always assign clientId so reconnects and late messages still work
-            if (message.type === 'connected' && message.clientId) {
+            if (message.type === "connected" && message.clientId) {
               this.clientId = message.clientId;
-              logger.info('Signaling', 'Received client ID', { clientId: this.clientId });
+              logger.info("Signaling", "Received client ID", { clientId: this.clientId });
               settle(resolve, this.clientId);
             }
             this.handleMessage(message);
-          } catch (e) {
-            logger.error('Signaling', 'Failed to parse message');
+          } catch {
+            logger.error("Signaling", "Failed to parse message");
           }
         };
       } catch (error) {
-        const message = error instanceof Error ? error.message : 'Failed to create WebSocket connection';
+        const message =
+          error instanceof Error ? error.message : "Failed to create WebSocket connection";
         settle(reject, new Error(message));
       }
     });
@@ -132,18 +137,18 @@ export class SignalingClient {
         try {
           const result = handler(message);
           // Catch promise rejections from async handlers
-          if (result && typeof (result as Promise<void>).catch === 'function') {
+          if (result && typeof (result as Promise<void>).catch === "function") {
             (result as Promise<void>).catch((err) => {
-              logger.error('Signaling', 'Handler error', {
+              logger.error("Signaling", "Handler error", {
                 type: message.type,
-                error: err instanceof Error ? err.message : String(err)
+                error: err instanceof Error ? err.message : String(err),
               });
             });
           }
         } catch (err) {
-          logger.error('Signaling', 'Sync handler error', {
+          logger.error("Signaling", "Sync handler error", {
             type: message.type,
-            error: err instanceof Error ? err.message : String(err)
+            error: err instanceof Error ? err.message : String(err),
           });
         }
       });
@@ -155,7 +160,11 @@ export class SignalingClient {
 
   // Attempt to reconnect on disconnect
   private attemptReconnect() {
-    if (!this.allowReconnect || this.isReconnecting || this.reconnectAttempts >= this.maxReconnectAttempts) {
+    if (
+      !this.allowReconnect ||
+      this.isReconnecting ||
+      this.reconnectAttempts >= this.maxReconnectAttempts
+    ) {
       return;
     }
 
@@ -164,7 +173,7 @@ export class SignalingClient {
 
     const baseDelay = this.reconnectDelay * Math.pow(2, this.reconnectAttempts - 1);
     const delay = Math.round(baseDelay * (0.5 + Math.random() * 0.5));
-    logger.info('Signaling', 'Reconnecting', { delayMs: delay, attempt: this.reconnectAttempts });
+    logger.info("Signaling", "Reconnecting", { delayMs: delay, attempt: this.reconnectAttempts });
 
     setTimeout(() => {
       if (this.ws?.readyState !== WebSocket.OPEN) {
@@ -175,7 +184,7 @@ export class SignalingClient {
               try {
                 this.joinRoom(this.roomId);
               } catch {
-                logger.error('Signaling', 'Failed to rejoin room after reconnect');
+                logger.error("Signaling", "Failed to rejoin room after reconnect");
               }
             }
           })
@@ -190,26 +199,26 @@ export class SignalingClient {
   joinRoom(roomId: string): void {
     this.roomId = roomId;
     const sent = this.send({
-      type: 'handshake-init',
-      roomId
+      type: "handshake-init",
+      roomId,
     });
     if (!sent) {
-      throw new Error('Failed to join room: not connected to server');
+      throw new Error("Failed to join room: not connected to server");
     }
-    logger.info('Signaling', 'Joining room', { roomId });
+    logger.info("Signaling", "Joining room", { roomId });
   }
 
   // Send a message. Returns false if not connected.
   send(message: Partial<SignalingMessage>): boolean {
     if (!this.ws || this.ws.readyState !== WebSocket.OPEN) {
-      logger.error('Signaling', 'Cannot send - not connected', { type: message.type });
+      logger.error("Signaling", "Cannot send - not connected", { type: message.type });
       return false;
     }
 
     const fullMessage: SignalingMessage = {
-      type: message.type || 'error',
+      type: message.type || "error",
       ...message,
-      roomId: message.roomId || this.roomId
+      roomId: message.roomId || this.roomId,
     };
 
     this.ws.send(JSON.stringify(fullMessage));
@@ -219,36 +228,36 @@ export class SignalingClient {
   // Send offer to peer
   sendOffer(offer: RTCSessionDescriptionInit, peerId?: string): boolean {
     return this.send({
-      type: 'offer',
+      type: "offer",
       to: peerId,
-      payload: offer
+      payload: offer,
     });
   }
 
   // Send answer to peer
   sendAnswer(answer: RTCSessionDescriptionInit, peerId: string): boolean {
     return this.send({
-      type: 'answer',
+      type: "answer",
       to: peerId,
-      payload: answer
+      payload: answer,
     });
   }
 
   // Send ICE candidate
   sendIceCandidate(candidate: RTCIceCandidate, peerId?: string): boolean {
     return this.send({
-      type: 'ice-candidate',
+      type: "ice-candidate",
       to: peerId,
-      payload: candidate.toJSON()
+      payload: candidate.toJSON(),
     });
   }
 
   // Send handshake verification message
   sendHandshakeVerify(payload: unknown, peerId?: string): boolean {
     return this.send({
-      type: 'handshake-verify',
+      type: "handshake-verify",
       to: peerId,
-      payload
+      payload,
     });
   }
 
@@ -285,8 +294,8 @@ export class SignalingClient {
     this.maxReconnectAttempts = 0; // Prevent reconnection
     this.ws?.close();
     this.ws = null;
-    this.clientId = '';
-    this.roomId = '';
+    this.clientId = "";
+    this.roomId = "";
     this.messageHandlers.clear();
   }
 }

@@ -1,27 +1,50 @@
-import { useCallback, useState } from 'react';
-import { motion, AnimatePresence } from 'framer-motion';
-import { MAX_FILE_SIZE, MAX_FILE_SIZE_DISPLAY, formatFileSize } from '../types';
+import { useCallback, useState } from "react";
+import { motion, AnimatePresence } from "framer-motion";
+import { MAX_FILE_SIZE, formatFileSize } from "../types";
 
 interface DropZoneProps {
-  onFileSelect: (file: File) => void;
+  onFilesSelect: (files: File[]) => void;
   disabled?: boolean;
 }
 
-export function DropZone({ onFileSelect, disabled }: DropZoneProps) {
+export function DropZone({ onFilesSelect, disabled }: DropZoneProps) {
   const [isDragging, setIsDragging] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
   const validateAndSelect = useCallback(
-    (file: File) => {
-      if (file.size > MAX_FILE_SIZE) {
-        setError(`File too large (${formatFileSize(file.size)}). Maximum size is ${MAX_FILE_SIZE_DISPLAY}`);
+    (fileList: FileList | File[]) => {
+      const allFiles = Array.from(fileList);
+      const errors: string[] = [];
+      const valid: File[] = [];
+
+      for (const file of allFiles) {
+        if (file.size > MAX_FILE_SIZE) {
+          errors.push(`${file.name} too large (${formatFileSize(file.size)})`);
+        } else if (file.size === 0) {
+          errors.push(`${file.name} is empty`);
+        } else {
+          valid.push(file);
+        }
+      }
+
+      if (errors.length > 0 && valid.length === 0) {
+        setError(errors.length === 1 ? errors[0] : `${errors.length} files skipped (empty files)`);
         setTimeout(() => setError(null), 5000);
         return;
       }
-      setError(null);
-      onFileSelect(file);
+
+      if (errors.length > 0) {
+        setError(`${errors.length} file(s) skipped (too large or empty)`);
+        setTimeout(() => setError(null), 5000);
+      } else {
+        setError(null);
+      }
+
+      if (valid.length > 0) {
+        onFilesSelect(valid);
+      }
     },
-    [onFileSelect]
+    [onFilesSelect],
   );
 
   const handleDragOver = useCallback(
@@ -30,7 +53,7 @@ export function DropZone({ onFileSelect, disabled }: DropZoneProps) {
       e.stopPropagation();
       if (!disabled) setIsDragging(true);
     },
-    [disabled]
+    [disabled],
   );
 
   const handleDragLeave = useCallback((e: React.DragEvent) => {
@@ -44,102 +67,127 @@ export function DropZone({ onFileSelect, disabled }: DropZoneProps) {
       e.preventDefault();
       e.stopPropagation();
       setIsDragging(false);
-
       if (disabled) return;
-
-      const files = e.dataTransfer.files;
-      if (files.length > 0) {
-        validateAndSelect(files[0]);
+      if (e.dataTransfer.files.length > 0) {
+        validateAndSelect(e.dataTransfer.files);
       }
     },
-    [disabled, validateAndSelect]
+    [disabled, validateAndSelect],
   );
 
   const handleClick = useCallback(() => {
     if (disabled) return;
-
-    const input = document.createElement('input');
-    input.type = 'file';
+    const input = document.createElement("input");
+    input.type = "file";
+    input.multiple = true;
     input.onchange = (e) => {
-      const file = (e.target as HTMLInputElement).files?.[0];
-      if (file) validateAndSelect(file);
+      const files = (e.target as HTMLInputElement).files;
+      if (files && files.length > 0) validateAndSelect(files);
     };
     input.click();
   }, [disabled, validateAndSelect]);
 
   return (
-    <motion.div
-      className={`
-        relative w-full max-w-lg
-        rounded-2xl border-2 border-dashed
-        cursor-pointer
-        bg-surface/50
-        flex flex-col items-center justify-center gap-5
-        py-14 px-8
-        transition-colors duration-200
-        ${isDragging ? 'border-primary bg-primary-muted' : 'border-border hover:border-primary/50'}
-        ${disabled ? 'opacity-50 cursor-not-allowed' : ''}
-      `}
-      onDragOver={handleDragOver}
-      onDragLeave={handleDragLeave}
-      onDrop={handleDrop}
-      onClick={handleClick}
-      role="button"
-      aria-label="Drop file or click to select"
-      tabIndex={0}
-      onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') handleClick(); }}
-      whileHover={disabled ? {} : { scale: 1.01 }}
-      whileTap={disabled ? {} : { scale: 0.99 }}
-    >
-      {/* Icon */}
+    <div className="w-full max-w-lg">
       <motion.div
-        animate={isDragging ? { y: -6, scale: 1.05 } : { y: 0, scale: 1 }}
-        transition={{ type: 'spring', stiffness: 300, damping: 20 }}
+        className={`
+          relative w-full
+          rounded-2xl border-2 border-dashed
+          cursor-pointer
+          flex flex-col items-center justify-center gap-4
+          py-16 px-8
+          transition-all duration-200
+          ${
+            isDragging
+              ? "border-primary bg-primary-muted scale-[1.02]"
+              : "border-border hover:border-border-hover bg-surface/30 hover:bg-surface/50"
+          }
+          ${disabled ? "opacity-50 cursor-not-allowed" : ""}
+        `}
+        onDragOver={handleDragOver}
+        onDragLeave={handleDragLeave}
+        onDrop={handleDrop}
+        onClick={handleClick}
+        role="button"
+        aria-label="Drop files here or click to browse"
+        tabIndex={0}
+        onKeyDown={(e) => {
+          if (e.key === "Enter" || e.key === " ") {
+            e.preventDefault();
+            handleClick();
+          }
+        }}
+        whileHover={disabled ? {} : { y: -2 }}
+        whileTap={disabled ? {} : { scale: 0.99 }}
       >
-        <svg
-          className="w-12 h-12 text-text-faint"
-          viewBox="0 0 24 24"
-          fill="none"
-          stroke="currentColor"
-          strokeWidth="1.5"
-          aria-hidden="true"
+        {/* Upload icon */}
+        <motion.div
+          animate={isDragging ? { y: -8, scale: 1.1 } : { y: 0, scale: 1 }}
+          transition={{ type: "spring", stiffness: 300, damping: 20 }}
+          className={`
+            w-14 h-14 rounded-xl flex items-center justify-center
+            ${isDragging ? "bg-primary/20" : "bg-surface"}
+            border transition-colors duration-200
+            ${isDragging ? "border-primary/30" : "border-border"}
+          `}
         >
-          <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" />
-          <polyline points="17 8 12 3 7 8" />
-          <line x1="12" y1="3" x2="12" y2="15" />
-        </svg>
-      </motion.div>
+          <svg
+            className={`w-6 h-6 transition-colors duration-200 ${isDragging ? "text-primary" : "text-text-faint"}`}
+            viewBox="0 0 24 24"
+            fill="none"
+            stroke="currentColor"
+            strokeWidth="1.5"
+            strokeLinecap="round"
+            strokeLinejoin="round"
+            aria-hidden="true"
+          >
+            <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" />
+            <polyline points="17 8 12 3 7 8" />
+            <line x1="12" y1="3" x2="12" y2="15" />
+          </svg>
+        </motion.div>
 
-      {/* Text */}
-      <div className="text-center">
-        <p className="text-text text-base font-medium mb-1">
-          {isDragging ? 'Drop file here' : 'Drop file or click to select'}
-        </p>
-        <p className="text-text-faint text-sm">
-          Up to {MAX_FILE_SIZE_DISPLAY}
-        </p>
-      </div>
+        {/* Text */}
+        <div className="text-center">
+          <p className="text-text text-base font-medium">
+            {isDragging ? "Drop to send" : "Drop files or click to select"}
+          </p>
+          <p className="text-text-faint text-sm mt-1">Any file size — streamed directly</p>
+        </div>
+      </motion.div>
 
       {/* Error message */}
       <AnimatePresence>
         {error && (
           <motion.div
-            className="absolute bottom-4 left-4 right-4"
-            initial={{ opacity: 0, y: 10 }}
+            className="mt-3"
+            initial={{ opacity: 0, y: -8 }}
             animate={{ opacity: 1, y: 0 }}
-            exit={{ opacity: 0, y: 10 }}
+            exit={{ opacity: 0, y: -8 }}
           >
-            <div className="bg-error-muted border border-error/30 rounded-lg py-3 px-4 flex items-center gap-3">
-              <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#EF4444" strokeWidth="2" aria-hidden="true">
+            <div className="bg-error-muted border border-error/30 rounded-xl py-3 px-4 flex items-center gap-3">
+              <svg
+                width="16"
+                height="16"
+                viewBox="0 0 24 24"
+                fill="none"
+                stroke="#EF4444"
+                strokeWidth="2"
+                strokeLinecap="round"
+                strokeLinejoin="round"
+                aria-hidden="true"
+              >
                 <circle cx="12" cy="12" r="10" />
                 <line x1="12" y1="8" x2="12" y2="12" />
                 <line x1="12" y1="16" x2="12.01" y2="16" />
               </svg>
-              <p className="text-error text-sm">{error}</p>
+              <p className="text-error text-sm" role="alert">
+                {error}
+              </p>
             </div>
           </motion.div>
         )}
       </AnimatePresence>
-    </motion.div>
+    </div>
   );
 }
